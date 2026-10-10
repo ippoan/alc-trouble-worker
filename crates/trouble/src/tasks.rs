@@ -11,8 +11,7 @@
 //! - `PUT`/`DELETE /trouble/tasks/{task_id}` — 来た項目だけ変える (担当・期限などは `""` / `null` で空にできる)。
 //!   削除は物理削除 (204)。無いものは 404
 //!
-//! ファイルの口 (`/trouble/tasks/{task_id}/files`・`/trouble/task-files/...`) は R2 が要るので files と一緒に
-//! 後続の PR で移す。
+//! ファイルの口 (`/trouble/tasks/{task_id}/files`・`/trouble/task-files/...`) は [`crate::files`]。
 //!
 //! 一覧の SQL は WHERE・ORDER BY を組み立てるが、文に入るのは固定の断片と `$n` だけ (利用者の入力は全部 bind。
 //! 並びの列は許可リスト [`SortBy`] からだけ選ぶ)。

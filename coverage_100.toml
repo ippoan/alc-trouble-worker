@@ -4,7 +4,7 @@
 #   TROUBLE_TEST_ADMIN_DATABASE_URL=... cargo llvm-cov --locked -p trouble --text > cov-trouble.txt
 #   bash scripts/check_coverage_100.sh --use-cache cov-trouble.txt
 #
-# 計測するのは `cargo test -p trouble` の全部 = 各 module の単体テスト (純粋関数) と tests/api_db.rs・tickets_db.rs・tasks_db.rs
+# 計測するのは `cargo test -p trouble` の全部 = 各 module の単体テスト (純粋関数) と tests/api_db.rs・tickets_db.rs・tasks_db.rs・files_db.rs
 # (口から実 DB まで。接続先が無ければ失敗する)。
 # worker 本体 (直下の src/、wasm 専用) は native で計測できないので対象外。
 
@@ -39,3 +39,7 @@ path = "crates/trouble/src/workflow.rs"
 # タスク (CRUD・横断の一覧の絞り込みと並び・並べ替え)
 [[files]]
 path = "crates/trouble/src/tasks.rs"
+
+# 添付 (チケット・タスクのファイル。R2 はモック。親の確かめ・400・503・R2 と DB の失敗)
+[[files]]
+path = "crates/trouble/src/files.rs"

@@ -10,6 +10,7 @@
 #![cfg(target_arch = "wasm32")]
 
 mod db;
+mod r2;
 mod tcp;
 
 use std::sync::Arc;
@@ -20,6 +21,12 @@ use futures_util::lock::Mutex;
 use tower_service::Service;
 use trouble::{router, AppState, LogSink};
 use worker::{console_error, event, Context, Env, HttpRequest, Result, WorkerVersionMetadata};
+
+use crate::r2::R2Store;
+
+/// 添付の R2 の binding (wrangler.toml の `[[r2_buckets]]`。本番と staging で別の bucket)。
+/// 無ければ添付の口だけが 503 (ほかの口は動く。rust の storage 無しと同じ)
+const TROUBLE_R2_BINDING: &str = "TROUBLE_R2";
 
 fn log_sink() -> LogSink {
     Arc::new(|message| console_error!("{message}"))
@@ -54,6 +61,10 @@ async fn fetch(req: HttpRequest, env: Env, _ctx: Context) -> Result<Response<Bod
     let state = AppState {
         pg: Arc::new(Mutex::new(pg)),
         log: log_sink(),
+        files: env
+            .bucket(TROUBLE_R2_BINDING)
+            .ok()
+            .map(|b| Arc::new(R2Store::new(b)) as trouble::files::SharedStore),
     };
     let mut resp = match router().with_state(state).call(req).await {
         Ok(r) => r,
