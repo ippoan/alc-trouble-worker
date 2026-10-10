@@ -11,13 +11,17 @@
 //!   応答は rust の `LineworksMember` と同じ `[{user_id, user_name, email}]`。
 //!   **rust と違う**: lineworks-worker が断ったときは、その status と語 (`error`、`missing_scope` の `scope` など) を写す
 //!   ([`relay_error`]。rust は bot が無い → 503・一覧の失敗 → 500 で本文なし)。届かない・binding 無し・本文が読めない → 502
+//! - `POST /trouble/notification-prefs/test-send` — 通知が届くかの確かめ (rust に無い口。rust-alc-api の notify の
+//!   `lineworks/channels/{id}/test-send` と同じ考え方)。`{"lineworks_user_id"}` の 1 人へ固定の [`TEST_MESSAGE`] を
+//!   [`notify`] と同じ経路・同じ body で送る。[`notify`] と違い失敗は応答に返す: 成功 204、lineworks-worker の断りは
+//!   [`relay_error`] で写し、届かない・binding 無しは 502。宛先が [`valid_user_id`] でなければ送らずに 400 `target_invalid`
 //!
 //! ログは段の名前と、届かない理由の label か status だけ (宛先の user_id・本文・tenant を出さない)。
 
 use alc_core_wasm::TenantId;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -27,6 +31,13 @@ use crate::service::{Method, ServiceRequest, Unreachable};
 use crate::AppState;
 
 pub const MEMBERS_PATH: &str = "/trouble/lineworks/members";
+pub const TEST_SEND_PATH: &str = "/trouble/notification-prefs/test-send";
+
+/// テスト送信の本文 (固定。利用者に自由文を送らせない)
+pub const TEST_MESSAGE: &str = "[テスト] トラブル管理の LINE WORKS 通知の送信確認です。";
+
+/// テスト送信の宛先の長さの上限 (byte)
+pub const USER_ID_MAX: usize = 256;
 
 /// lineworks-worker の口 (path は lineworks-worker の `crates/lineworks/src/routes.rs` と同じ)
 pub const LW_MESSAGES_PATH: &str = "/api/internal/lineworks/messages";
@@ -35,7 +46,9 @@ pub const LW_USERS_PATH: &str = "/api/internal/lineworks/users";
 pub type ApiError = (StatusCode, Json<Value>);
 
 pub fn router() -> Router<AppState> {
-    Router::new().route(MEMBERS_PATH, get(members))
+    Router::new()
+        .route(MEMBERS_PATH, get(members))
+        .route(TEST_SEND_PATH, post(test_send))
 }
 
 fn request(method: Method, path: &str, tenant_id: Uuid, body: Option<String>) -> ServiceRequest {
@@ -172,6 +185,57 @@ async fn members(
     })
 }
 
+/// LINE WORKS の user id として送ってよいか (lineworks-worker の `target_invalid` と同じ規則に長さの上限を足す:
+/// 空・長すぎ・`/ ? # %`・空白・制御文字を断る)
+pub fn valid_user_id(id: &str) -> bool {
+    let bad = |c: char| matches!(c, '/' | '?' | '#' | '%') || c.is_whitespace() || c.is_control();
+    !id.is_empty() && id.len() <= USER_ID_MAX && !id.chars().any(bad)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TestSend {
+    /// 無ければ空 = 400 (axum の 422 にしない)
+    #[serde(default)]
+    pub lineworks_user_id: String,
+}
+
+async fn test_send(
+    State(state): State<AppState>,
+    Extension(TenantId(tenant_id)): Extension<TenantId>,
+    Json(input): Json<TestSend>,
+) -> Result<StatusCode, ApiError> {
+    if !valid_user_id(&input.lineworks_user_id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "target_invalid"})),
+        ));
+    }
+    let fail = |why: String| {
+        (state.log)(&format!(
+            "trouble: lineworks test-send failed: lineworks ({why})"
+        ));
+    };
+    let Some(lw) = &state.lineworks else {
+        fail("not_configured".to_owned());
+        return Err(upstream_error());
+    };
+    let req = request(
+        Method::Post,
+        LW_MESSAGES_PATH,
+        tenant_id,
+        Some(message_body(&input.lineworks_user_id, TEST_MESSAGE)),
+    );
+    let resp = lw.call(req).await.map_err(|Unreachable(l)| {
+        fail(l.to_owned());
+        upstream_error()
+    })?;
+    if !(200..300).contains(&resp.status) {
+        fail(format!("status {}", resp.status));
+        return Err(relay_error(resp.status, &resp.body));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +247,26 @@ mod tests {
             v,
             json!({"to": {"user_id": "u1"}, "content": {"type": "text", "text": "本文"}})
         );
+    }
+
+    #[test]
+    fn user_id_rule() {
+        assert!(valid_user_id("u-1@example.com"));
+        assert!(valid_user_id(&"a".repeat(USER_ID_MAX)));
+        for bad in [
+            "",
+            "a b",
+            "a/b",
+            "a?b",
+            "a#b",
+            "a%b",
+            "a\tb",
+            "a\u{7f}",
+            "a\u{3000}b",
+        ] {
+            assert!(!valid_user_id(bad), "{bad:?}");
+        }
+        assert!(!valid_user_id(&"a".repeat(USER_ID_MAX + 1)));
     }
 
     #[test]

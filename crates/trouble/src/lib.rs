@@ -11,7 +11,7 @@
 //! - [`tasks`] — チケットのタスク (経過記録。CRUD・横断の一覧・並べ替え)
 //! - [`files`] — チケット・タスクの添付 (R2 に置く。置き場は [`files::FileStore`] で差し替える)
 //! - [`schedules`] — 予約通知 (作成・一覧・取消と、alarm の DO が呼ぶ発火の口)。alarm は [`alarm`]
-//! - [`lineworks`] — LINE WORKS の通知 (チケット・タスク・予約) とメンバーの一覧。ippoan/alc-lineworks-worker を呼ぶ
+//! - [`lineworks`] — LINE WORKS の通知 (チケット・タスク・予約)・メンバーの一覧・テスト送信。ippoan/alc-lineworks-worker を呼ぶ
 //!
 //! 別の Worker (alc-lineworks-worker・alarm の DO) は Service Binding で呼ぶ ([`service::Service`]。テストはモック)。
 //!
