@@ -182,7 +182,7 @@ pub struct TransitionRequest {
 
 /// `""` と `null` を None にする (rust の `serde_helpers::empty_string_as_none_datetime` / `_uuid`)。
 /// 画面の日付・UUID の入力欄は空のとき `""` を送ってくる
-fn empty_string_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn empty_string_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: serde::de::DeserializeOwned,
@@ -198,7 +198,9 @@ where
 
 /// 来ない → None、`""` / `null` → Some(None) (空にする)、文字列 → Some(Some) (rust の
 /// `serde_helpers::empty_string_as_none_option_string`)
-fn empty_string_as_clear<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+pub(crate) fn empty_string_as_clear<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
 where
     D: Deserializer<'de>,
 {
