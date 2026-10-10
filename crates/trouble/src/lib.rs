@@ -12,6 +12,7 @@
 //! - [`files`] — チケット・タスクの添付 (R2 に置く。置き場は [`files::FileStore`] で差し替える)
 //! - [`schedules`] — 予約通知 (作成・一覧・取消と、alarm の DO が呼ぶ発火の口)。alarm は [`alarm`]
 //! - [`lineworks`] — LINE WORKS の通知 (チケット・タスク・予約)・メンバーの一覧・テスト送信。ippoan/alc-lineworks-worker を呼ぶ
+//! - [`camera`] — カメラ停止の自動チケット (rust のカメラの死活監視が auth-worker 経由で呼ぶ内部の口。`X-Tenant-ID` は要る)
 //!
 //! 別の Worker (alc-lineworks-worker・alarm の DO) は Service Binding で呼ぶ ([`service::Service`]。テストはモック)。
 //!
@@ -21,6 +22,7 @@
 //! ログ・エラー応答は固定の語だけ (エラーの文・識別子を載せない。DB のエラーは `kind` = SQLSTATE か固定の label)。
 
 pub mod alarm;
+pub mod camera;
 pub mod field_layouts;
 pub mod files;
 pub mod lineworks;
@@ -100,6 +102,7 @@ pub fn router() -> Router<AppState> {
         .merge(files::router())
         .merge(schedules::router())
         .merge(lineworks::router())
+        .merge(camera::router())
         .route_layer(middleware::from_fn(require_tenant_header))
         // 発火の口は tenant の layer の外 (X-Tenant-ID は来ない。tenant は予約の行から取る)
         .merge(schedules::internal_router());
