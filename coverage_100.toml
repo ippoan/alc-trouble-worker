@@ -1,0 +1,29 @@
+# 行カバレッジ 100% の登録簿 (ippoan/alc-lineworks-worker の同名のファイルの形。Refs ippoan/rust-alc-api#747)。
+#
+#   bash scripts/fetch-migrations.sh
+#   TROUBLE_TEST_ADMIN_DATABASE_URL=... cargo llvm-cov --locked -p trouble --text > cov-trouble.txt
+#   bash scripts/check_coverage_100.sh --use-cache cov-trouble.txt
+#
+# 計測するのは `cargo test -p trouble` の全部 = 各 module の単体テスト (純粋関数) と tests/api_db.rs
+# (口から実 DB まで。接続先が無ければ失敗する)。
+# worker 本体 (直下の src/、wasm 専用) は native で計測できないので対象外。
+
+# tenant の layer・DB の失敗の語・409 の判定・router の組み立て
+[[files]]
+path = "crates/trouble/src/lib.rs"
+
+# 名前と並び順だけのマスタ 4 本 (categories / offices / progress-statuses / task-types。auto-seed を含む)
+[[files]]
+path = "crates/trouble/src/master.rs"
+
+# タスクの状態のマスタ (auto-seed・key の補い・部分の更新)
+[[files]]
+path = "crates/trouble/src/task_statuses.rs"
+
+# 入力欄の表示設定 (jsonb の読み書き・読めない設定の 500)
+[[files]]
+path = "crates/trouble/src/field_layouts.rs"
+
+# 通知の設定 (400・upsert の部分の更新)
+[[files]]
+path = "crates/trouble/src/notifications.rs"
