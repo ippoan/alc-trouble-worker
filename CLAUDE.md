@@ -5,8 +5,9 @@ path・method・JSON の形・status は rust と同じ (nuxt-trouble がその�
 マスタ系: `categories`・`offices`・`progress-statuses`・`task-types` (`crates/trouble/src/master.rs`)・
 `task-statuses`・`field-layout`・`notification-prefs` と、`tickets` (`tickets.rs`)・`workflow` と `tickets/{id}/history`
 (`workflow.rs`)・`tasks` と `tickets/{id}/tasks` (`tasks.rs`)・添付 `tickets/{id}/files`・`files/{id}`・
-`tasks/{id}/files`・`task-files/{id}` (`files.rs`。R2 の binding `TROUBLE_R2`)。
-schedules / members / LINE WORKS の通知は後続の PR (通知の呼び位置は `TODO(#747 T5)`)。
+`tasks/{id}/files`・`task-files/{id}` (`files.rs`。R2 の binding `TROUBLE_R2`)・予約通知 `schedules` と発火
+`/api/internal/trouble/schedules/{id}/fire` (`schedules.rs`。alarm は `alarm.rs`)・`lineworks/members` と LINE WORKS の通知
+(`lineworks.rs`)。これで rust の口は全部。
 直下 = Worker (wasm 専用)、`crates/trouble/` = 口・SQL。
 
 rust の trouble_* webhook (`trouble_created` / `trouble_status_changed`) は移さない (`webhook_configs.event_type` の CHECK で設定できず、rust でも発火しない死んだ経路)。
@@ -36,10 +37,14 @@ DB テストは使い捨ての postgres:17 へ。URL が無ければ失敗 (skip
   **Content-Disposition は rust と違う**: ASCII だけ (`filename*=UTF-8''<percent>; filename="<ASCII 代替>"` の順。
   Workers が非 ASCII のヘッダ値をファイル名入りの警告にするため。順は nuxt の正規表現のため)。
   staging の R2 は本番の bucket `trouble-files` を指さない (check-exposure.sh)。R2 の失敗は `trouble: <段> failed: r2 (<段の名前>)`。
+- 別の Worker は Service Binding だけ (`service::Service`。Worker は `src/service.rs`、テストはモック): LINE WORKS は
+  alc-lineworks-worker (`ALC_LINEWORKS`)、alarm は nuxt-notify の schedule-alarm (`SCHEDULE_ALARM` + Secrets Store
+  `INTERNAL_SHARED_SECRET`)。staging は staging の Worker を指す (check-exposure.sh)。await を `tenant_tx` の中に入れない。
+  通知は await (fire-and-forget にしない)、失敗はログだけで口は成功。宛先の user_id・本文をログに出さない。
 - role は見ない (rust も `X-Tenant-ID` だけ)。
 - DB は `PgClient::tenant_tx` + `query_typed` 系だけ。名前付き prepared statement 禁止。Row を tx の外へ出さない。
   WHERE に tenant_id も明示する。SQL の意味は rust の `crates/alc-trouble/src/repo/*.rs` と同じにする。
 - マスタの表の名前は `MasterTable::TABLE` のリテラルだけ (SQL に埋め込むので、実行時の文字列を入れない)。
-- `coverage_100.toml` の登録を外さない。CI の本数 (lib 14・api_db 9・tickets_db 11・tasks_db 7・files_db 8) はテストを足したら上げる。
+- `coverage_100.toml` の登録を外さない。CI の本数 (lib 25・api_db 9・tickets_db 11・tasks_db 7・files_db 8・schedules_db 7・notify_db 5) はテストを足したら上げる。
 - public repo: ホスト名・tenant UUID・個人情報を書かない。`v*` タグ = 本番 (Tag Release 手動)。
 - kit の rev は直下 `Cargo.toml` の 1 か所 (alc-lineworks-worker と同じ rev)。

@@ -19,6 +19,8 @@
 #     届くので、トップレベル (本番) にだけ置く (staging に置かない)
 #   - env 配下 (env.staging を含む) の r2_buckets が本番の bucket (トップレベルの r2_buckets の bucket_name) を指さない
 #     (本番の添付を読み書きする)
+#   - env 配下 (env.staging を含む) の services が本番の Worker (トップレベルの services の service) を指さない
+#     (staging から本番の LINE WORKS の送信・alarm に届く)
 # 違えば exit 1。CI で毎回走らせる。陰性対照は scripts/check-exposure-test.sh。
 #
 #   bash scripts/check-exposure.sh [wrangler.toml]
@@ -85,6 +87,13 @@ for name, e in envs.items():
     for b in e.get("r2_buckets", []):
         if b.get("bucket_name") in prod_buckets:
             err(f"env.{name} の r2_buckets が本番の bucket {b['bucket_name']} を指している (env 用の bucket を指すこと)")
+
+# 本番の Worker への Service Binding を env 配下 (staging を含む) から張らない
+prod_services = {b.get("service") for b in cfg.get("services", [])}
+for name, e in envs.items():
+    for b in e.get("services", []):
+        if b.get("service") in prod_services:
+            err(f"env.{name} の services が本番の Worker {b['service']} を指している (env 用の Worker を指すこと)")
 
 if errors:
     sys.exit(1)

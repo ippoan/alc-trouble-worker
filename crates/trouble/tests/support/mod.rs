@@ -11,7 +11,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use alc_worker_db::PgClient;
@@ -23,7 +23,9 @@ use futures_util::lock::Mutex;
 use tokio::sync::OnceCell;
 use tokio_postgres::{Client, Config, NoTls};
 use tower::ServiceExt;
+use trouble::alarm::Alarm;
 use trouble::files::{FileStore, SharedStore, StoreError};
+use trouble::service::{Service, ServiceRequest, ServiceResponse, SharedService, Unreachable};
 use trouble::{router, AppState};
 use uuid::Uuid;
 
@@ -54,7 +56,11 @@ pub const TABLES: &[&str] = &[
     "trouble_status_history",
     "trouble_tasks",
     "trouble_files",
+    "trouble_schedules",
 ];
+
+/// テストの alarm の secret (モックが受け取る値。秘密ではない)
+pub const ALARM_SECRET: &str = "alarm-test-secret";
 
 fn migrations_dir() -> std::path::PathBuf {
     let dir = std::path::PathBuf::from(concat!(
@@ -251,6 +257,10 @@ pub struct App {
     pub router: Router,
     pub logs: Arc<StdMutex<Vec<String>>>,
     pub store: Arc<MockStore>,
+    /// alc-lineworks-worker の代わり
+    pub lineworks: Arc<MockService>,
+    /// alarm の DO の代わり
+    pub alarm: Arc<MockService>,
 }
 
 impl App {
@@ -308,26 +318,140 @@ impl FileStore for MockStore {
     }
 }
 
-/// worker の src/lib.rs と同じ組み立て (R2 はモック)
+/// Service Binding の代わり。受けたリクエストを残し、`status` と `body` で応える (`unreachable` なら届かない)
+pub struct MockService {
+    pub calls: StdMutex<Vec<ServiceRequest>>,
+    pub status: AtomicU16,
+    pub body: StdMutex<Vec<u8>>,
+    pub unreachable: AtomicBool,
+}
+
+impl MockService {
+    pub fn new(status: u16) -> Self {
+        Self {
+            calls: StdMutex::new(Vec::new()),
+            status: AtomicU16::new(status),
+            body: StdMutex::new(Vec::new()),
+            unreachable: AtomicBool::new(false),
+        }
+    }
+
+    pub fn calls(&self) -> Vec<ServiceRequest> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    pub fn respond(&self, status: u16, body: &[u8]) {
+        self.status.store(status, Ordering::SeqCst);
+        *self.body.lock().unwrap() = body.to_vec();
+    }
+}
+
+impl Service for MockService {
+    fn call(&self, req: ServiceRequest) -> BoxFuture<'_, Result<ServiceResponse, Unreachable>> {
+        Box::pin(async move {
+            self.calls.lock().unwrap().push(req);
+            if self.unreachable.load(Ordering::SeqCst) {
+                return Err(Unreachable("fetch"));
+            }
+            Ok(ServiceResponse {
+                status: self.status.load(Ordering::SeqCst),
+                body: self.body.lock().unwrap().clone(),
+            })
+        })
+    }
+}
+
+/// 組み立ての有無 (worker の binding が在るか)
+#[derive(Clone, Copy)]
+pub struct Bindings {
+    pub store: bool,
+    pub lineworks: bool,
+    pub alarm: bool,
+}
+
+pub const ALL: Bindings = Bindings {
+    store: true,
+    lineworks: true,
+    alarm: true,
+};
+
+/// worker の src/lib.rs と同じ組み立て (R2・Service Binding はモック)
 pub fn build(pg: PgClient) -> App {
-    build_with(pg, true)
+    build_bindings(pg, ALL)
 }
 
 /// `with_store` が false なら R2 の binding が無い worker (添付の口は 503)
 pub fn build_with(pg: PgClient, with_store: bool) -> App {
+    build_bindings(
+        pg,
+        Bindings {
+            store: with_store,
+            ..ALL
+        },
+    )
+}
+
+pub fn build_bindings(pg: PgClient, b: Bindings) -> App {
     let logs = Arc::new(StdMutex::new(Vec::new()));
     let sink = logs.clone();
     let store = Arc::new(MockStore::default());
+    // 送信の口は 204、alarm は 200 (lineworks-worker・DO の成功の応答)
+    let lineworks = Arc::new(MockService::new(204));
+    let alarm = Arc::new(MockService::new(200));
     let state = AppState {
         pg: Arc::new(Mutex::new(pg)),
         log: Arc::new(move |m: &str| sink.lock().unwrap().push(m.to_owned())),
-        files: with_store.then(|| store.clone() as SharedStore),
+        files: b.store.then(|| store.clone() as SharedStore),
+        lineworks: b.lineworks.then(|| lineworks.clone() as SharedService),
+        alarm: b.alarm.then(|| Alarm {
+            service: alarm.clone() as SharedService,
+            secret: Arc::from(ALARM_SECRET),
+        }),
     };
     App {
         router: router().with_state(state),
         logs,
         store,
+        lineworks,
+        alarm,
     }
+}
+
+/// 通知の設定を 1 行入れる (superuser で)
+pub async fn pref(tenant: Uuid, event_type: &str, enabled: bool, to: &[&str]) {
+    let to: Vec<String> = to.iter().map(|s| s.to_string()).collect();
+    admin()
+        .await
+        .execute(
+            "INSERT INTO alc_api.trouble_notification_prefs \
+             (tenant_id, event_type, notify_channel, enabled, lineworks_user_ids) \
+             VALUES ($1, $2, 'lineworks', $3, $4)",
+            &[&tenant, &event_type, &enabled, &to],
+        )
+        .await
+        .unwrap();
+}
+
+/// lineworks-worker へ送った (宛先の user_id, 本文) の並び。各リクエストの形 (path・method・X-Tenant-ID・body のキー) も確かめる
+pub fn sent(app: &App, tenant: Uuid) -> Vec<(String, String)> {
+    app.lineworks
+        .calls()
+        .into_iter()
+        .map(|req| {
+            assert_eq!(req.method, trouble::service::Method::Post);
+            assert_eq!(req.path, "/api/internal/lineworks/messages");
+            assert!(req.headers.contains(&("X-Tenant-ID", tenant.to_string())));
+            let v: serde_json::Value = serde_json::from_str(req.body.as_deref().unwrap()).unwrap();
+            let obj = v.as_object().unwrap();
+            // bot_config_id は渡さない (tenant の既定の bot)
+            assert_eq!(obj.keys().collect::<Vec<_>>(), ["content", "to"]);
+            assert_eq!(v["content"]["type"], "text");
+            (
+                v["to"]["user_id"].as_str().unwrap().to_owned(),
+                v["content"]["text"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
 }
 
 pub async fn app() -> App {

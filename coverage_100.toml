@@ -4,7 +4,7 @@
 #   TROUBLE_TEST_ADMIN_DATABASE_URL=... cargo llvm-cov --locked -p trouble --text > cov-trouble.txt
 #   bash scripts/check_coverage_100.sh --use-cache cov-trouble.txt
 #
-# 計測するのは `cargo test -p trouble` の全部 = 各 module の単体テスト (純粋関数) と tests/api_db.rs・tickets_db.rs・tasks_db.rs・files_db.rs
+# 計測するのは `cargo test -p trouble` の全部 = 各 module の単体テスト (純粋関数) と tests/api_db.rs・tickets_db.rs・tasks_db.rs・files_db.rs・schedules_db.rs・notify_db.rs
 # (口から実 DB まで。接続先が無ければ失敗する)。
 # worker 本体 (直下の src/、wasm 専用) は native で計測できないので対象外。
 
@@ -43,3 +43,15 @@ path = "crates/trouble/src/tasks.rs"
 # 添付 (チケット・タスクのファイル。R2 はモック。親の確かめ・400・503・R2 と DB の失敗)
 [[files]]
 path = "crates/trouble/src/files.rs"
+
+# 予約通知 (作成の検証・alarm の登録と取消・発火の見出しと送信済みの印。DO と lineworks-worker はモック)
+[[files]]
+path = "crates/trouble/src/schedules.rs"
+
+# alarm の DO への登録・取消 (PUT / DELETE・secret のヘッダ・404 の成功扱い)
+[[files]]
+path = "crates/trouble/src/alarm.rs"
+
+# LINE WORKS の通知とメンバーの中継 (lineworks-worker はモック。断りの語の写し)
+[[files]]
+path = "crates/trouble/src/lineworks.rs"

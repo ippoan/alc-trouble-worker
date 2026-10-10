@@ -64,6 +64,10 @@ mutate "staging の r2_buckets が本番の bucket trouble-files を指す" \
   's = s.replace("bucket_name = \"trouble-files-staging\"", "bucket_name = \"trouble-files\"", 1)'
 mutate "staging 以外の env の r2_buckets が本番の bucket を指す" \
   's += "\n[env.other]\nname = \"x\"\nworkers_dev = false\npreview_urls = false\n\n[[env.other.r2_buckets]]\nbinding = \"TROUBLE_R2\"\nbucket_name = \"trouble-files\"\n"'
+mutate "staging の ALC_LINEWORKS が本番の alc-lineworks を指す" \
+  's = s.replace("service = \"alc-lineworks-staging\"", "service = \"alc-lineworks\"", 1)'
+mutate "staging の SCHEDULE_ALARM が本番の notify-schedule-alarm を指す" \
+  's = s.replace("service = \"notify-schedule-alarm-staging\"", "service = \"notify-schedule-alarm\"", 1)'
 
 
 exit "$fail"
