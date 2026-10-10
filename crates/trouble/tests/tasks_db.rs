@@ -704,6 +704,49 @@ async fn reorder_tasks() {
     assert!(app.logs().is_empty());
 }
 
+/// チケットがこの tenant に無ければ作らない: 無いチケット・別の tenant のチケットはどちらも 404 (本文なし) で、
+/// 行は増えない (rust と違う: rust は無いチケットで 500、別の tenant のチケットには作れてしまう)
+#[tokio::test]
+async fn create_needs_own_ticket() {
+    let app = app().await;
+    let a = tenant().await;
+    let b = tenant().await;
+    let tk = ticket(&app, a, "貨物事故", "A").await;
+    let count = || async {
+        admin()
+            .await
+            .query_one("SELECT count(*) FROM alc_api.trouble_tasks WHERE ticket_id = $1 OR tenant_id = ANY($2)", &[&tk.parse::<Uuid>().unwrap(), &vec![a, b]])
+            .await
+            .unwrap()
+            .get::<_, i64>(0)
+    };
+    let body = json!({"task_type": "連絡", "title": "x"});
+    for (who, ticket_id) in [
+        (b, tk.clone()),
+        (a, Uuid::new_v4().to_string()),
+        (b, Uuid::new_v4().to_string()),
+    ] {
+        let got = call(
+            &app,
+            "POST",
+            &format!("/api/trouble/tickets/{ticket_id}/tasks"),
+            Some(who),
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(
+            (got.status, got.body.is_empty()),
+            (404, true),
+            "{ticket_id}"
+        );
+    }
+    assert_eq!(count().await, 0);
+    // 自分のチケットには作れる (対照)
+    create(&app, a, &tk, body).await;
+    assert_eq!(count().await, 1);
+    assert!(app.logs().is_empty());
+}
+
 /// 別の tenant の行は見えない・変えられない・並べ替えられない
 #[tokio::test]
 async fn rls_hides_other_tenant_rows() {
@@ -798,19 +841,6 @@ async fn db_failure_is_500_with_fixed_logs() {
         );
         assert_logs_clean(&app, &[t, id]);
     }
-
-    // 無いチケットへの作成は外部キーの違反 (rust と同じく 500)
-    let rw = app().await;
-    let got = call(
-        &rw,
-        "POST",
-        &format!("/api/trouble/tickets/{id}/tasks"),
-        Some(t),
-        Some(json!({"task_type": "連絡", "title": "x"})),
-    )
-    .await;
-    assert_eq!((got.status, got.body.is_empty()), (500, true));
-    assert_eq!(rw.logs(), vec!["trouble: task create failed: db (23503)"]);
 
     // 読めるが書けないロール: 作成・更新・削除・並べ替えは 42501
     let rw = app().await;

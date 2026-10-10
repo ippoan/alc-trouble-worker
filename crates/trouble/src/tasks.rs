@@ -2,7 +2,9 @@
 //!
 //! - `GET /trouble/tasks` — チケット横断の一覧。絞り込み 9 種・並び 5 種 (許可リストに無い `sort_by` は 400)・
 //!   ページ (`per_page` は 1〜200)。`{items, total, page, per_page}`
-//! - `POST /trouble/tickets/{ticket_id}/tasks` — 201。題名が空 (空白だけ) は 400。`sort_order` を省くと末尾
+//! - `POST /trouble/tickets/{ticket_id}/tasks` — 201。題名が空 (空白だけ) は 400。`sort_order` を省くと末尾。
+//!   チケットがこの tenant に無い (無い・別の tenant) なら 404 で作らない (**rust と違う**: rust は確かめず、
+//!   無いチケットは外部キーの違反で 500、別の tenant のチケットには作れてしまう)
 //! - `GET /trouble/tickets/{ticket_id}/tasks` — `sort_order`・作成の順
 //! - `PUT /trouble/tickets/{ticket_id}/tasks/reorder` — `task_ids` の順に 0 から振り直し、並べた一覧を返す。
 //!   空・重複は 400。そのチケットに無い id が混ざれば 404 で、何も変えない
@@ -250,6 +252,11 @@ pub mod sql {
         columns!()
     );
 
+    /// 作成の前に、チケットがこの tenant のものか確かめる (外部キーの検査は RLS を通らないので、
+    /// これが無いと別の tenant のチケットにタスクを付けられる)
+    pub const TICKET_EXISTS: &str =
+        "SELECT 1 FROM alc_api.trouble_tickets WHERE id = $1 AND tenant_id = $2";
+
     pub const LIST_BY_TICKET: &str = concat!(
         "SELECT ",
         columns!(),
@@ -365,14 +372,24 @@ fn task(r: &Row) -> Task {
     }
 }
 
+/// 作成。チケットがこの tenant に無ければ (無い・別の tenant) INSERT せずに None
 pub async fn create(
     pg: &mut PgClient,
     tenant_id: Uuid,
     ticket_id: Uuid,
     input: CreateTask,
-) -> Result<Task, Error> {
+) -> Result<Option<Task>, Error> {
     pg.tenant_tx(tenant_id, move |tx| {
         Box::pin(async move {
+            let ticket = tx
+                .query_typed_opt(
+                    sql::TICKET_EXISTS,
+                    &[(&ticket_id, Type::UUID), (&tenant_id, Type::UUID)],
+                )
+                .await?;
+            if ticket.is_none() {
+                return Ok(None);
+            }
             let i = &input;
             let row = tx
                 .query_typed_one(
@@ -395,7 +412,7 @@ pub async fn create(
                     ],
                 )
                 .await?;
-            Ok(task(&row))
+            Ok(Some(task(&row)))
         })
     })
     .await
@@ -613,7 +630,8 @@ async fn create_handler(
     let mut pg = state.pg.lock().await;
     let task = create(&mut pg, tenant_id, ticket_id, body)
         .await
-        .map_err(|e| state.db_fail("task create", &e))?;
+        .map_err(|e| state.db_fail("task create", &e))?
+        .ok_or(StatusCode::NOT_FOUND)?;
     // TODO(#747 T5): LINE WORKS 通知
     Ok((StatusCode::CREATED, Json(task)))
 }

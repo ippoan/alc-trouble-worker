@@ -33,6 +33,6 @@ DB テストは使い捨ての postgres:17 へ。URL が無ければ失敗 (skip
 - DB は `PgClient::tenant_tx` + `query_typed` 系だけ。名前付き prepared statement 禁止。Row を tx の外へ出さない。
   WHERE に tenant_id も明示する。SQL の意味は rust の `crates/alc-trouble/src/repo/*.rs` と同じにする。
 - マスタの表の名前は `MasterTable::TABLE` のリテラルだけ (SQL に埋め込むので、実行時の文字列を入れない)。
-- `coverage_100.toml` の登録を外さない。CI の本数 (lib 12・api_db 9・tickets_db 11・tasks_db 6) はテストを足したら上げる。
+- `coverage_100.toml` の登録を外さない。CI の本数 (lib 12・api_db 9・tickets_db 11・tasks_db 7) はテストを足したら上げる。
 - public repo: ホスト名・tenant UUID・個人情報を書かない。`v*` タグ = 本番 (Tag Release 手動)。
 - kit の rev は直下 `Cargo.toml` の 1 か所 (alc-lineworks-worker と同じ rev)。

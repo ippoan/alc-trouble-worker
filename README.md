@@ -32,6 +32,8 @@ rust-alc-api と同じ。
 
 rust がチケットの作成・遷移で発火していた webhook は移さない (`webhook_configs` の CHECK でトラブルの設定が作れず、rust でも発火しない)。
 
+タスクの作成 (`POST /api/trouble/tickets/{id}/tasks`) は、チケットがその tenant に無ければ (無い・別の tenant) 404 で作らない。**rust と違う** (rust は確かめず、無いチケットは外部キーの違反で 500、別の tenant のチケットには作れてしまう)。
+
 マスタ 4 本の `PUT /{id}` は `{"sort_order": n}` だけを変える。作成は 201、名前の重複は 409、空白だけの名前は 400。
 
 ## 構成
