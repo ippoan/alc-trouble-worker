@@ -8,6 +8,7 @@
 //! - [`notifications`] — 通知の設定
 //! - [`tickets`] — チケット (CRUD・一覧・CSV・状態の遷移)
 //! - [`workflow`] — チケットの状態と遷移の定義・既定の作成・履歴
+//! - [`tasks`] — チケットのタスク (経過記録。CRUD・横断の一覧・並べ替え。ファイルの口は後続)
 //!
 //! 全部の口が `X-Tenant-ID` を要る (auth-worker が付ける。無い・UUID でない → 401。
 //! `alc_core_wasm::require_tenant_header`)。rust と同じく role は見ない。
@@ -18,6 +19,7 @@ pub mod field_layouts;
 pub mod master;
 pub mod notifications;
 pub mod task_statuses;
+pub mod tasks;
 pub mod tickets;
 pub mod workflow;
 
@@ -63,6 +65,7 @@ pub fn router() -> Router<AppState> {
         .merge(notifications::router())
         .merge(tickets::router())
         .merge(workflow::router())
+        .merge(tasks::router())
         .route_layer(middleware::from_fn(require_tenant_header));
     Router::new().nest("/api", trouble)
 }

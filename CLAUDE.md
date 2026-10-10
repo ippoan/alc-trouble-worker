@@ -4,7 +4,8 @@
 path・method・JSON の形・status は rust と同じ (nuxt-trouble がそのまま使う)。いまの口は `/api/trouble/` の下の
 マスタ系: `categories`・`offices`・`progress-statuses`・`task-types` (`crates/trouble/src/master.rs`)・
 `task-statuses`・`field-layout`・`notification-prefs` と、`tickets` (`tickets.rs`)・`workflow` と `tickets/{id}/history`
-(`workflow.rs`)。tasks / files / schedules / members / LINE WORKS の通知は後続の PR (通知の呼び位置は `TODO(#747 T5)`)。
+(`workflow.rs`)・`tasks` と `tickets/{id}/tasks` (`tasks.rs`。ファイルの口を除く)。files (タスクのファイルの口を含む) /
+schedules / members / LINE WORKS の通知は後続の PR (通知の呼び位置は `TODO(#747 T5)`)。
 直下 = Worker (wasm 専用)、`crates/trouble/` = 口・SQL。
 
 rust の trouble_* webhook (`trouble_created` / `trouble_status_changed`) は移さない (`webhook_configs.event_type` の CHECK で設定できず、rust でも発火しない死んだ経路)。
@@ -32,6 +33,6 @@ DB テストは使い捨ての postgres:17 へ。URL が無ければ失敗 (skip
 - DB は `PgClient::tenant_tx` + `query_typed` 系だけ。名前付き prepared statement 禁止。Row を tx の外へ出さない。
   WHERE に tenant_id も明示する。SQL の意味は rust の `crates/alc-trouble/src/repo/*.rs` と同じにする。
 - マスタの表の名前は `MasterTable::TABLE` のリテラルだけ (SQL に埋め込むので、実行時の文字列を入れない)。
-- `coverage_100.toml` の登録を外さない。CI の本数 (lib 9・api_db 9・tickets_db 11) はテストを足したら上げる。
+- `coverage_100.toml` の登録を外さない。CI の本数 (lib 12・api_db 9・tickets_db 11・tasks_db 7) はテストを足したら上げる。
 - public repo: ホスト名・tenant UUID・個人情報を書かない。`v*` タグ = 本番 (Tag Release 手動)。
 - kit の rev は直下 `Cargo.toml` の 1 か所 (alc-lineworks-worker と同じ rev)。

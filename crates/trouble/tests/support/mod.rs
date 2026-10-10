@@ -48,6 +48,7 @@ pub const TABLES: &[&str] = &[
     "trouble_workflow_states",
     "trouble_workflow_transitions",
     "trouble_status_history",
+    "trouble_tasks",
 ];
 
 fn migrations_dir() -> std::path::PathBuf {

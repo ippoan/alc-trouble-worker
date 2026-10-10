@@ -25,8 +25,14 @@ rust-alc-api と同じ。
 | `/api/trouble/workflow/states[/{id}]` | GET / POST / DELETE | 状態 |
 | `/api/trouble/workflow/transitions[/{id}]` | GET / POST / DELETE | 遷移 |
 | `/api/trouble/workflow/setup` | POST | 状態が無ければ既定の 4 つと遷移 7 本を作る |
+| `/api/trouble/tasks` | GET | タスクのチケット横断の一覧 (絞り込み 9 種・並び 5 種・ページ) |
+| `/api/trouble/tickets/{id}/tasks` | GET / POST | チケットのタスクの一覧 (並び順) と作成 (201) |
+| `/api/trouble/tickets/{id}/tasks/reorder` | PUT | `task_ids` の順に並び順を振り直す (そのチケットに無い id は 404) |
+| `/api/trouble/tasks/{id}` | PUT / DELETE | タスクの部分の更新・削除 |
 
 rust がチケットの作成・遷移で発火していた webhook は移さない (`webhook_configs` の CHECK でトラブルの設定が作れず、rust でも発火しない)。
+
+タスクの作成 (`POST /api/trouble/tickets/{id}/tasks`) は、チケットがその tenant に無ければ (無い・別の tenant) 404 で作らない。**rust と違う** (rust は確かめず、無いチケットは外部キーの違反で 500、別の tenant のチケットには作れてしまう)。
 
 マスタ 4 本の `PUT /{id}` は `{"sort_order": n}` だけを変える。作成は 201、名前の重複は 409、空白だけの名前は 400。
 
@@ -34,7 +40,7 @@ rust がチケットの作成・遷移で発火していた webhook は移さな
 
 - 直下 (`src/`) — Worker 本体 (wasm 専用)。DB への経路 (`src/db.rs`: staging = Workers VPC → PgBouncer、
   本番 = Hyperdrive `TROUBLE_HYPERDRIVE`、ローカル = `DATABASE_URL`) と workers-rs への載せ方
-- `crates/trouble/` — 口と SQL (native でもビルドでき、`tests/api_db.rs`・`tests/tickets_db.rs` が実 DB で通す)
+- `crates/trouble/` — 口と SQL (native でもビルドでき、`tests/api_db.rs`・`tests/tickets_db.rs`・`tests/tasks_db.rs` が実 DB で通す)
 - `scripts/` — 公開範囲の検査 (`check-exposure.sh` と陰性対照)、migration の取得、coverage の gate
 
 デプロイ: PR → `wrangler deploy --dry-run`、main への merge → staging、タグ `v*` (Tag Release を手動) → 本番。
