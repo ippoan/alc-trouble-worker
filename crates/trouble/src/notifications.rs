@@ -79,6 +79,11 @@ pub mod sql {
 
     pub const DELETE: &str =
         "DELETE FROM alc_api.trouble_notification_prefs WHERE id = $1 AND tenant_id = $2";
+
+    /// rust の find_enabled (通知の前段)。使う列は宛先だけ
+    pub const FIND_ENABLED: &str =
+        "SELECT lineworks_user_ids FROM alc_api.trouble_notification_prefs \
+         WHERE tenant_id = $1 AND event_type = $2 AND notify_channel = $3 AND enabled = TRUE";
 }
 
 fn pref(r: &Row) -> NotificationPref {
@@ -145,6 +150,33 @@ pub async fn delete(pg: &mut PgClient, tenant_id: Uuid, id: Uuid) -> Result<bool
         })
     })
     .await
+}
+
+/// `(event_type, "lineworks")` の設定が有効なら、その LINE WORKS の宛先。無い・無効・読めないなら None
+/// (rust の `if let Ok(Some(pref)) = find_enabled(..)` と同じく、読めないときは通知しないだけ)
+pub async fn enabled_lineworks(
+    pg: &mut PgClient,
+    tenant_id: Uuid,
+    event_type: &'static str,
+) -> Option<Vec<String>> {
+    pg.tenant_tx(tenant_id, move |tx| {
+        Box::pin(async move {
+            let row = tx
+                .query_typed_opt(
+                    sql::FIND_ENABLED,
+                    &[
+                        (&tenant_id, Type::UUID),
+                        (&event_type, Type::TEXT),
+                        (&"lineworks", Type::TEXT),
+                    ],
+                )
+                .await?;
+            Ok(row.map(|r| r.get::<_, Vec<String>>(0)))
+        })
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 pub fn router() -> Router<AppState> {

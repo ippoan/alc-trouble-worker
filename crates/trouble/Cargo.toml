@@ -12,9 +12,10 @@ alc-core-wasm = { workspace = true }
 alc-worker-db = { workspace = true }
 # multipart は添付の口 (rust と同じ axum の Multipart。multer は pure Rust で wasm32 でもビルドできる)
 axum = { version = "0.8", default-features = false, features = ["json", "multipart", "query"] }
-# 行の created_at / updated_at (rust-alc-api と同じ chrono の JSON の形。時計は使わない)。
-# alloc は CSV の発生日の `format("%Y-%m-%d")` (rust と同じ書き方) に要る
-chrono = { version = "0.4", default-features = false, features = ["alloc", "serde"] }
+# 行の created_at / updated_at (rust-alc-api と同じ chrono の JSON の形)。
+# alloc は CSV の発生日の `format("%Y-%m-%d")` (rust と同じ書き方) に要る。
+# clock は予約の時刻の検証の `Utc::now()` (rust と同じ。wasm32 では wasmbind が JS の Date から読む)
+chrono = { version = "0.4", default-features = false, features = ["alloc", "serde", "clock", "wasmbind"] }
 # チケットの CSV (rust の export_csv と同じ csv crate で、同じエスケープ)。pure Rust
 csv = "1"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

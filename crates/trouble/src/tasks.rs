@@ -31,8 +31,8 @@ use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{Error, Row};
 use uuid::Uuid;
 
-use crate::tickets::{empty_string_as_clear, empty_string_as_none};
-use crate::AppState;
+use crate::tickets::{self, empty_string_as_clear, empty_string_as_none};
+use crate::{lineworks, notifications, AppState};
 
 /// rust の `TroubleTask` と同じ形・同じキーの順
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -255,6 +255,10 @@ pub mod sql {
     /// これが無いと別の tenant のチケットにタスクを付けられる)
     pub const TICKET_EXISTS: &str =
         "SELECT 1 FROM alc_api.trouble_tickets WHERE id = $1 AND tenant_id = $2";
+
+    /// 通知の文面の担当者の氏名
+    pub const EMPLOYEE_NAME: &str = "SELECT name FROM alc_api.employees \
+         WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL";
 
     pub const LIST_BY_TICKET: &str = concat!(
         "SELECT ",
@@ -568,6 +572,56 @@ pub async fn reorder(
     .await
 }
 
+/// 担当者の氏名 (rust の employees.get と同じく論理削除した人は無い扱い)
+pub async fn employee_name(
+    pg: &mut PgClient,
+    tenant_id: Uuid,
+    id: Uuid,
+) -> Result<Option<String>, Error> {
+    pg.tenant_tx(tenant_id, move |tx| {
+        Box::pin(async move {
+            let row = tx
+                .query_typed_opt(
+                    sql::EMPLOYEE_NAME,
+                    &[(&tenant_id, Type::UUID), (&id, Type::UUID)],
+                )
+                .await?;
+            Ok(row.map(|r| r.get::<_, String>(0)))
+        })
+    })
+    .await
+}
+
+/// task_assigned の LINE WORKS 通知 (rust と同じ文面。チケット番号が読めなければ 0、氏名が読めなければ「不明」)
+async fn notify_assigned(
+    state: &AppState,
+    pg: &mut PgClient,
+    tenant_id: Uuid,
+    task: &Task,
+    employee_id: Uuid,
+) {
+    let Some(to) = notifications::enabled_lineworks(pg, tenant_id, "task_assigned").await else {
+        return;
+    };
+    let ticket_no = tickets::get_one(pg, tenant_id, task.ticket_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|t| t.ticket_no)
+        .unwrap_or(0);
+    let name = employee_name(pg, tenant_id, employee_id)
+        .await
+        .ok()
+        .flatten();
+    let msg = format!(
+        "タスクアサイン: #{} {} → {}",
+        ticket_no,
+        task.title,
+        name.as_deref().unwrap_or("不明"),
+    );
+    lineworks::notify(state, tenant_id, "task_assigned", &msg, &to).await;
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/trouble/tasks", get(list_all_handler))
@@ -626,12 +680,15 @@ async fn create_handler(
     if body.title.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
+    let assigned_to = body.assigned_to;
     let mut pg = state.pg.lock().await;
     let task = create(&mut pg, tenant_id, ticket_id, body)
         .await
         .map_err(|e| state.db_fail("task create", &e))?
         .ok_or(StatusCode::NOT_FOUND)?;
-    // TODO(#747 T5): LINE WORKS 通知
+    if let Some(employee_id) = assigned_to {
+        notify_assigned(&state, &mut pg, tenant_id, &task, employee_id).await;
+    }
     Ok((StatusCode::CREATED, Json(task)))
 }
 
@@ -671,12 +728,16 @@ async fn update_handler(
     Path(task_id): Path<Uuid>,
     Json(body): Json<UpdateTask>,
 ) -> Result<Json<Task>, StatusCode> {
+    // 担当者に人が来たときだけ (`null` で外したときは送らない。rust と同じ)
+    let has_assigned_to = matches!(body.assigned_to, Some(Some(_)));
     let mut pg = state.pg.lock().await;
     let task = update(&mut pg, tenant_id, task_id, body)
         .await
         .map_err(|e| state.db_fail("task update", &e))?
         .ok_or(StatusCode::NOT_FOUND)?;
-    // TODO(#747 T5): LINE WORKS 通知
+    if let Some(employee_id) = task.assigned_to.filter(|_| has_assigned_to) {
+        notify_assigned(&state, &mut pg, tenant_id, &task, employee_id).await;
+    }
     Ok(Json(task))
 }
 

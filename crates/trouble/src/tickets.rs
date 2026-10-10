@@ -28,7 +28,7 @@ use tokio_postgres::{Error, Row};
 use uuid::Uuid;
 
 use crate::master::{self, DEFAULT_CATEGORIES};
-use crate::{workflow, AppState};
+use crate::{lineworks, notifications, workflow, AppState};
 
 /// rust の `TroubleTicket` と同じ形・同じキーの順
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -734,7 +734,15 @@ async fn create_handler(
         .await;
     }
     // rust の trouble_* webhook は webhook_configs の CHECK で設定できず発火しない (#747 で移植せず)
-    // TODO(#747 T5): LINE WORKS 通知
+    if let Some(to) = notifications::enabled_lineworks(&mut pg, tenant_id, "trouble_created").await
+    {
+        // 文面は rust と同じ (値が 4 つで「カテゴリ:」に対象者・「担当者:」に内容が入るのも rust のまま)
+        let msg = format!(
+            "トラブル登録: #{} {}\nカテゴリ: {}\n担当者: {}",
+            ticket.ticket_no, ticket.category, ticket.person_name, ticket.description,
+        );
+        lineworks::notify(&state, tenant_id, "trouble_created", &msg, &to).await;
+    }
     Ok((StatusCode::CREATED, Json(ticket)))
 }
 
@@ -769,12 +777,21 @@ async fn update_handler(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateTicket>,
 ) -> Result<Json<Ticket>, StatusCode> {
+    let has_assigned_to = body.assigned_to.is_some();
     let mut pg = state.pg.lock().await;
     let ticket = update(&mut pg, tenant_id, id, body)
         .await
         .map_err(|e| state.db_fail("ticket update", &e))?
         .ok_or(StatusCode::NOT_FOUND)?;
-    // TODO(#747 T5): LINE WORKS 通知
+    // 担当者が来たときだけ (rust と同じ)
+    if has_assigned_to {
+        if let Some(to) =
+            notifications::enabled_lineworks(&mut pg, tenant_id, "trouble_assigned").await
+        {
+            let msg = format!("担当者アサイン: #{} {}", ticket.ticket_no, ticket.category);
+            lineworks::notify(&state, tenant_id, "trouble_assigned", &msg, &to).await;
+        }
+    }
     Ok(Json(ticket))
 }
 
@@ -827,7 +844,15 @@ async fn transition_handler(
     )
     .await;
     // rust の trouble_* webhook は webhook_configs の CHECK で設定できず発火しない (#747 で移植せず)
-    // TODO(#747 T5): LINE WORKS 通知
+    if let Some(to) =
+        notifications::enabled_lineworks(&mut pg, tenant_id, "trouble_status_changed").await
+    {
+        let msg = format!(
+            "ステータス変更: #{} {}",
+            updated.ticket_no, updated.category
+        );
+        lineworks::notify(&state, tenant_id, "trouble_status_changed", &msg, &to).await;
+    }
     Ok(Json(updated))
 }
 

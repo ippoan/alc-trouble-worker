@@ -5,7 +5,7 @@
 
 ## 口
 
-すべて `X-Tenant-ID` が要る (auth-worker が付ける。無い・UUID でない → 401)。path・method・JSON の形・status は
+発火の口 (`/api/internal/...`) を除き `X-Tenant-ID` が要る (auth-worker が付ける。無い・UUID でない → 401)。path・method・JSON の形・status は
 rust-alc-api と同じ。
 
 | path | method | 内容 |
@@ -36,6 +36,11 @@ rust-alc-api と同じ。
 | `/api/trouble/files/{id}/restore` | POST | 論理削除を戻す |
 | `/api/trouble/tasks/{id}/files` | GET / POST | タスクの添付の一覧と作成 |
 | `/api/trouble/task-files/{id}`[`/download`] | DELETE / GET | タスクの添付の論理削除・本体 |
+| `/api/trouble/schedules` | POST | 予約通知の作成 (201。過去・30 日より先・空の本文・宛先なしは 400、チケットが無ければ 404)。alarm を登録する |
+| `/api/trouble/tickets/{id}/schedules` | GET | チケットの予約通知 (予約の時刻の順) |
+| `/api/trouble/schedules/{id}` | DELETE | 予約の取消 (204。pending でなければ 409)。alarm を取り消す |
+| `/api/internal/trouble/schedules/{id}/fire` | POST | 予約の発火 (alarm の DO が auth-worker の alc-internal-proxy 経由で呼ぶ。`X-Tenant-ID` 不要) |
+| `/api/trouble/lineworks/members` | GET | LINE WORKS の組織のメンバー (alc-lineworks-worker の中継) |
 
 rust がチケットの作成・遷移で発火していた webhook は移さない (`webhook_configs` の CHECK でトラブルの設定が作れず、rust でも発火しない)。
 
@@ -44,13 +49,20 @@ rust がチケットの作成・遷移で発火していた webhook は移さな
 添付は R2 の binding `TROUBLE_R2` (本番 `trouble-files`・staging `trouble-files-staging`、キーは rust と同じ) に置く。binding が無ければ添付の読み書きは 503。上限は rust と同じ 20MB (超えると 400)、拡張子の許可リストは rust にも無い。アップロードは親 (チケット / タスク) がその tenant に無ければ R2 に書かずに 404。
 `Content-Disposition` は **rust と違う**: rust は日本語の名前を生の UTF-8 で返すが、ここは ASCII だけで `attachment; filename*=UTF-8''<percent-encoding>; filename="<非 ASCII・制御文字・"・\ を _ にした名前>"` (RFC 6266。Workers が非 ASCII のヘッダ値を値入りの警告にしてログに出すため)。
 
+LINE WORKS への送信はすべて ippoan/alc-lineworks-worker の Service Binding `ALC_LINEWORKS` 経由 (`POST /api/internal/lineworks/messages`、tenant の既定の bot。Bot の秘密値はこの Worker に来ない)。チケットの作成・担当者の設定・状態の遷移、タスクの担当者の設定、予約の発火で、通知の設定 (`notification-prefs`) が有効な宛先へ送る (文面・条件は rust と同じ)。送信の失敗はログだけで、口の応答は成功のまま。
+予約の alarm は ippoan/nuxt-notify の schedule-alarm (DO) を Service Binding `SCHEDULE_ALARM` で呼ぶ (`PUT`/`DELETE /alarms/{id}`、`X-Internal-Shared-Secret` は Secrets Store の `INTERNAL_SHARED_SECRET`)。binding か secret が無ければ登録しない (rust の `SCHEDULE_ALARM_URL` 未設定と同じ)。
+発火は `get_trouble_schedule` (SECURITY DEFINER) が pending の行だけを返すので、送信済み・取消済み・無い id は 404 (rust と同じ)。
+`GET /api/trouble/lineworks/members` の失敗は **rust と違う**: lineworks-worker が断った status と語 (`missing_scope` の `scope` など) を写し、届かない・binding 無しは 502 (rust は bot 無し 503・一覧の失敗 500 で本文なし)。
+
 マスタ 4 本の `PUT /{id}` は `{"sort_order": n}` だけを変える。作成は 201、名前の重複は 409、空白だけの名前は 400。
 
 ## 構成
 
 - 直下 (`src/`) — Worker 本体 (wasm 専用)。DB への経路 (`src/db.rs`: staging = Workers VPC → PgBouncer、
-  本番 = Hyperdrive `TROUBLE_HYPERDRIVE`、ローカル = `DATABASE_URL`)・R2 の binding (`src/r2.rs`) と workers-rs への載せ方
-- `crates/trouble/` — 口と SQL (native でもビルドでき、`tests/api_db.rs`・`tests/tickets_db.rs`・`tests/tasks_db.rs`・`tests/files_db.rs` が実 DB で通す。R2 はモック)
+  本番 = Hyperdrive `TROUBLE_HYPERDRIVE`、ローカル = `DATABASE_URL`)・R2 の binding (`src/r2.rs`)・Service Binding
+  (`src/service.rs`) と workers-rs への載せ方
+- `crates/trouble/` — 口と SQL (native でもビルドでき、`tests/api_db.rs`・`tests/tickets_db.rs`・`tests/tasks_db.rs`・`tests/files_db.rs`・
+  `tests/schedules_db.rs`・`tests/notify_db.rs` が実 DB で通す。R2・lineworks-worker・alarm の DO はモック)
 - `scripts/` — 公開範囲の検査 (`check-exposure.sh` と陰性対照)、migration の取得、coverage の gate
 
 デプロイ: PR → `wrangler deploy --dry-run`、main への merge → staging、タグ `v*` (Tag Release を手動) → 本番。
