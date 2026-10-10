@@ -1,13 +1,14 @@
 //! トラブルのチケット (rust の `alc-trouble` の tickets.rs と repo/trouble_tickets.rs の写し)。
 //!
 //! - `POST /trouble/tickets` — 201。分類は tenant の分類のマスタ (無ければ既定の 7 つ) のどれかでないと 400。
-//!   状態は初期の状態 (在れば) で、履歴を 1 行足す。`ticket_no` は DB の既定値で振る (INSERT で指定しない)。
-//!   webhook `trouble_created` を積む
+//!   状態は初期の状態 (在れば) で、履歴を 1 行足す。`ticket_no` は DB の既定値で振る (INSERT で指定しない)
 //! - `GET /trouble/tickets` — 絞り込み 8 種・並び 2 種・ページ。`{tickets, total, page, per_page}`
 //! - `GET /trouble/tickets/csv` — 同じ絞り込みで 10000 件まで、BOM 付きの CSV
 //! - `GET`/`PUT`/`DELETE /trouble/tickets/{id}` — 削除は論理削除 (204)。消したもの・無いものは 404
-//! - `POST /trouble/tickets/{id}/transition` — 遷移の表に無い移り方は 422。履歴を 1 行足し、
-//!   webhook `trouble_status_changed` を積む
+//! - `POST /trouble/tickets/{id}/transition` — 遷移の表に無い移り方は 422。履歴を 1 行足す
+//!
+//! rust がここで発火していた webhook (`trouble_created` / `trouble_status_changed`) は移さない
+//! (`webhook_configs.event_type` の CHECK でトラブルの設定が作れず、rust でも発火しない)。
 //!
 //! 一覧の SQL は WHERE・ORDER BY を組み立てるが、文に入るのは固定の断片と `$n` だけ (利用者の入力は全部 bind。
 //! 並びの列と向きは許可リスト [`order_sql`] からだけ選ぶ)。
@@ -21,13 +22,12 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{Error, Row};
 use uuid::Uuid;
 
 use crate::master::{self, DEFAULT_CATEGORIES};
-use crate::webhook::Event;
 use crate::{workflow, AppState};
 
 /// rust の `TroubleTicket` と同じ形・同じキーの順
@@ -731,22 +731,7 @@ async fn create_handler(
         )
         .await;
     }
-    state.webhooks.push(Event {
-        tenant_id,
-        event_type: "trouble_created",
-        payload: json!({
-            "event": "trouble_created",
-            "timestamp": (state.now)(),
-            "tenant_id": tenant_id,
-            "data": {
-                "ticket_id": ticket.id,
-                "ticket_no": ticket.ticket_no,
-                "category": ticket.category,
-                "person_name": ticket.person_name,
-                "description": ticket.description,
-            }
-        }),
-    });
+    // rust の trouble_* webhook は webhook_configs の CHECK で設定できず発火しない (#747 で移植せず)
     // TODO(#747 T5): LINE WORKS 通知
     Ok((StatusCode::CREATED, Json(ticket)))
 }
@@ -839,21 +824,7 @@ async fn transition_handler(
         body.comment,
     )
     .await;
-    state.webhooks.push(Event {
-        tenant_id,
-        event_type: "trouble_status_changed",
-        payload: json!({
-            "event": "trouble_status_changed",
-            "timestamp": (state.now)(),
-            "tenant_id": tenant_id,
-            "data": {
-                "ticket_id": id,
-                "ticket_no": updated.ticket_no,
-                "from_status_id": current.status_id,
-                "to_status_id": body.to_state_id,
-            }
-        }),
-    });
+    // rust の trouble_* webhook は webhook_configs の CHECK で設定できず発火しない (#747 で移植せず)
     // TODO(#747 T5): LINE WORKS 通知
     Ok(Json(updated))
 }
@@ -888,6 +859,7 @@ async fn csv_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn order_is_from_the_allow_list() {

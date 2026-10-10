@@ -27,8 +27,6 @@ alc-worker-db = { git = "https://github.com/ippoan/alc-worker-kit", rev = "5a3b7
 [dependencies]
 alc-worker-db = { workspace = true }
 axum = { version = "0.8", default-features = false }
-# webhook の payload の「今」(`worker::Date` の ms から作る。時計の feature は使わない)
-chrono = { version = "0.4", default-features = false }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 trouble = { path = "crates/trouble" }
 tokio-postgres = { version = "0.7", default-features = false, features = ["js"] }

@@ -1,12 +1,11 @@
 //! チケット・状態の流れの口を、実 DB (`alc_api_rt` で接続) で通す。期待値は rust-alc-api の tests/trouble_test.rs
-//! (応答の形・並び・検索) に合わせる。積まれる webhook (`AppState::webhooks`) の中身もここで見る (送るのは tests/webhook_db.rs)。
+//! (応答の形・並び・検索) に合わせる。
 //! 接続先は `TROUBLE_TEST_ADMIN_DATABASE_URL` (無ければ失敗する。tests/support)。
 
 mod support;
 
 use serde_json::{json, Value};
 use support::*;
-use trouble::webhook::Event;
 use uuid::Uuid;
 
 const TICKET_KEYS: &[&str] = &[
@@ -140,7 +139,7 @@ async fn tenant_header_is_required() {
     assert!(app.logs().is_empty());
 }
 
-/// 作成 → 一覧 → 取得 → 更新 (登録番号の空にする・保つ) → 削除 → 404。応答の形と、積まれる webhook
+/// 作成 → 一覧 → 取得 → 更新 (登録番号の空にする・保つ) → 削除 → 404。応答の形
 #[tokio::test]
 async fn ticket_crud() {
     let app = app().await;
@@ -202,27 +201,6 @@ async fn ticket_crud() {
         assert_eq!(ticket[k], "", "{k}");
     }
 
-    // 積まれた webhook (rust と同じ payload)
-    assert_eq!(
-        app.state.webhooks.take(),
-        vec![Event {
-            tenant_id: t,
-            event_type: "trouble_created",
-            payload: json!({
-                "event": "trouble_created",
-                "timestamp": now(),
-                "tenant_id": t,
-                "data": {
-                    "ticket_id": id,
-                    "ticket_no": ticket["ticket_no"],
-                    "category": "貨物事故",
-                    "person_name": "テスト太郎",
-                    "description": "テスト説明",
-                }
-            }),
-        }]
-    );
-
     // 項目を省いた作成は空文字・既定値
     let minimal = create(&app, t, json!({"category": "その他"})).await;
     assert_eq!(minimal["title"], "");
@@ -230,7 +208,6 @@ async fn ticket_crud() {
     assert_eq!(minimal["custom_fields"], json!({}));
     assert_eq!(minimal["damage_amount"], Value::Null);
     assert!(minimal["ticket_no"].as_i64() > ticket["ticket_no"].as_i64());
-    app.state.webhooks.take();
 
     let body = list(&app, t, "").await;
     assert_eq!(body["total"], 2);
@@ -285,8 +262,6 @@ async fn ticket_crud() {
         .json();
     assert_eq!(kept["registration_number"], "");
     assert_eq!(kept["assigned_to"], json!(ticket_id));
-    // 更新は webhook を積まない (rust と同じ)
-    assert!(app.state.webhooks.take().is_empty());
 
     let other = Uuid::new_v4();
     let got = call(
@@ -341,7 +316,6 @@ async fn ticket_category_and_no_workflow() {
     )
     .await;
     assert_eq!((got.status, got.body.is_empty()), (400, true));
-    assert!(app.state.webhooks.take().is_empty());
 
     let ticket = create(&app, t, json!({"category": "人身事故"})).await;
     assert_eq!(ticket["status_id"], Value::Null);
@@ -655,7 +629,7 @@ async fn ticket_csv() {
     assert!(app.logs().is_empty());
 }
 
-/// 状態の遷移: 許された移り方だけ (無ければ 422)・履歴・積まれる webhook。状態の無いチケットは初期の状態へだけ
+/// 状態の遷移: 許された移り方だけ (無ければ 422)・履歴。状態の無いチケットは初期の状態へだけ
 #[tokio::test]
 async fn ticket_transition_and_history() {
     let app = app().await;
@@ -670,7 +644,6 @@ async fn ticket_transition_and_history() {
     )
     .await;
     let id = id_of(&ticket);
-    app.state.webhooks.take();
 
     let transition = |ticket: String, to: String, comment: Option<&str>| {
         let app = &app;
@@ -695,26 +668,8 @@ async fn ticket_transition_and_history() {
     let updated = got.json();
     assert_eq!(updated["status_id"], json!(states["in_progress"]));
     assert_eq!(updated["ticket_no"], ticket["ticket_no"]);
-    assert_eq!(
-        app.state.webhooks.take(),
-        vec![Event {
-            tenant_id: t,
-            event_type: "trouble_status_changed",
-            payload: json!({
-                "event": "trouble_status_changed",
-                "timestamp": now(),
-                "tenant_id": t,
-                "data": {
-                    "ticket_id": id,
-                    "ticket_no": ticket["ticket_no"],
-                    "from_status_id": states["new"],
-                    "to_status_id": states["in_progress"],
-                }
-            }),
-        }]
-    );
 
-    // 遷移の表に無い (対応中 → 対応中) は 422。何も積まない
+    // 遷移の表に無い (対応中 → 対応中) は 422
     let got = transition(id.clone(), states["in_progress"].clone(), None).await;
     assert_eq!((got.status, got.body.is_empty()), (422, true));
     // 完了へは直接行ける (migration 111 の (1,3))
@@ -753,7 +708,6 @@ async fn ticket_transition_and_history() {
             .status,
         200
     );
-    assert_eq!(app.state.webhooks.take().len(), 2);
 
     let got = call(
         &app,
@@ -1109,7 +1063,6 @@ async fn rls_hides_other_tenant_rows() {
     )
     .await;
     let id = id_of(&ticket);
-    app.state.webhooks.take();
 
     assert_eq!(list(&app, a, "").await["total"], 1);
     let body = list(&app, b, "").await;
@@ -1195,7 +1148,6 @@ async fn history_failure_does_not_fail_ticket() {
     )
     .await;
     assert_eq!(got.status, 200);
-    assert_eq!(app.state.webhooks.take().len(), 2);
     assert_eq!(
         app.logs(),
         vec!["trouble: ticket history failed: db (42501)"; 2]
@@ -1301,7 +1253,6 @@ async fn db_failure_is_500_with_fixed_logs() {
             logs[0]
         );
         assert_logs_clean(&app, &[t, id]);
-        assert!(app.state.webhooks.take().is_empty());
     }
 
     // 読めるが書けないロール: 作成・setup・更新系は 42501
@@ -1345,6 +1296,5 @@ async fn db_failure_is_500_with_fixed_logs() {
         );
     }
     assert_eq!(app.logs().len(), 3);
-    assert!(app.state.webhooks.take().is_empty());
     assert_logs_clean(&app, &[t, other]);
 }
