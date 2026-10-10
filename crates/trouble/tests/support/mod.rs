@@ -16,17 +16,22 @@ use alc_worker_db::PgClient;
 use axum::body::Body;
 use axum::http::Request;
 use axum::Router;
+use chrono::{DateTime, Utc};
+use futures_util::future::BoxFuture;
 use futures_util::lock::Mutex;
 use tokio::sync::OnceCell;
 use tokio_postgres::{Client, Config, NoTls};
 use tower::ServiceExt;
+use trouble::webhook::{Http, HttpError, Outbox, WebhookRequest, WebhookResponse};
 use trouble::{router, AppState};
 use uuid::Uuid;
 
 pub const ADMIN_URL_ENV: &str = "TROUBLE_TEST_ADMIN_DATABASE_URL";
 pub const RT_ROLE: &str = "alc_api_rt";
-/// trouble の表を読めるが書けないロール (auto-seed の作成が失敗する経路を通すため)
+/// trouble の表を読めるが書けないロール (auto-seed の作成・配信ログの書き込みが失敗する経路を通すため)
 pub const READ_ONLY_ROLE: &str = "trouble_test_read_only";
+/// 状態の変更の履歴 (trouble_status_history) にだけ書けないロール (履歴が失敗してもチケットの口は成功する経路)
+pub const NO_HISTORY_ROLE: &str = "trouble_test_no_history";
 /// 使い捨ての DB 専用 (秘密ではない)
 const PASSWORD: &str = "trouble-test-throwaway";
 const SEARCH_PATH: &str = "-c search_path=alc_api,public";
@@ -42,6 +47,12 @@ pub const TABLES: &[&str] = &[
     "trouble_task_statuses",
     "trouble_field_layouts",
     "trouble_notification_prefs",
+    "trouble_tickets",
+    "trouble_workflow_states",
+    "trouble_workflow_transitions",
+    "trouble_status_history",
+    "webhook_configs",
+    "webhook_deliveries",
 ];
 
 fn migrations_dir() -> std::path::PathBuf {
@@ -162,7 +173,12 @@ async fn migrate(su: &Client) {
         "ALTER ROLE {RT_ROLE} LOGIN PASSWORD '{PASSWORD}';
          CREATE ROLE {READ_ONLY_ROLE} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '{PASSWORD}';
          GRANT USAGE ON SCHEMA alc_api TO {READ_ONLY_ROLE};
-         GRANT SELECT ON {tables} TO {READ_ONLY_ROLE};"
+         GRANT SELECT ON {tables} TO {READ_ONLY_ROLE};
+         CREATE ROLE {NO_HISTORY_ROLE} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '{PASSWORD}';
+         GRANT USAGE ON SCHEMA alc_api TO {NO_HISTORY_ROLE};
+         GRANT SELECT, INSERT, UPDATE, DELETE ON {tables} TO {NO_HISTORY_ROLE};
+         REVOKE INSERT ON alc_api.trouble_status_history FROM {NO_HISTORY_ROLE};
+         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA alc_api TO {NO_HISTORY_ROLE};"
     ))
     .await
     .unwrap();
@@ -233,6 +249,8 @@ pub async fn tenant() -> Uuid {
 pub struct App {
     pub router: Router,
     pub logs: Arc<StdMutex<Vec<String>>>,
+    /// 口と同じ state (積まれた webhook を取り出す・同じ接続で webhook を送るのに使う)
+    pub state: AppState,
 }
 
 impl App {
@@ -241,17 +259,75 @@ impl App {
     }
 }
 
-/// worker の src/lib.rs と同じ組み立て
+/// テストの「今」(webhook の payload の timestamp・配信ログの delivered_at)
+pub fn now() -> DateTime<Utc> {
+    DateTime::from_timestamp(1_790_000_000, 0).unwrap()
+}
+
+/// worker の src/lib.rs と同じ組み立て (時計だけ固定)
 pub fn build(pg: PgClient) -> App {
     let logs = Arc::new(StdMutex::new(Vec::new()));
     let sink = logs.clone();
     let state = AppState {
         pg: Arc::new(Mutex::new(pg)),
         log: Arc::new(move |m: &str| sink.lock().unwrap().push(m.to_owned())),
+        now: Arc::new(now),
+        webhooks: Outbox::default(),
     };
     App {
-        router: router().with_state(state),
+        router: router().with_state(state.clone()),
         logs,
+        state,
+    }
+}
+
+/// webhook の送り先の偽物。応答を順に返し (尽きたら 200)、送った要求と待ちの秒を覚える
+#[derive(Default)]
+pub struct FakeHttp {
+    pub responses: StdMutex<Vec<Result<WebhookResponse, HttpError>>>,
+    pub sent: StdMutex<Vec<WebhookRequest>>,
+    pub sleeps: StdMutex<Vec<u64>>,
+}
+
+impl FakeHttp {
+    pub fn with(responses: Vec<Result<WebhookResponse, HttpError>>) -> Self {
+        Self {
+            responses: StdMutex::new(responses),
+            ..Default::default()
+        }
+    }
+
+    pub fn sent(&self) -> Vec<WebhookRequest> {
+        self.sent.lock().unwrap().clone()
+    }
+
+    pub fn sleeps(&self) -> Vec<u64> {
+        self.sleeps.lock().unwrap().clone()
+    }
+}
+
+pub fn status(code: u16, body: &str) -> Result<WebhookResponse, HttpError> {
+    Ok(WebhookResponse {
+        status: code,
+        body: body.to_owned(),
+    })
+}
+
+impl Http for FakeHttp {
+    fn post(&self, req: WebhookRequest) -> BoxFuture<'_, Result<WebhookResponse, HttpError>> {
+        self.sent.lock().unwrap().push(req);
+        let mut responses = self.responses.lock().unwrap();
+        let next = if responses.is_empty() {
+            status(200, "ok")
+        } else {
+            responses.remove(0)
+        };
+        Box::pin(async move { next })
+    }
+
+    fn sleep(&self, secs: u64) -> BoxFuture<'_, ()> {
+        self.sleeps.lock().unwrap().push(secs);
+        Box::pin(async {})
     }
 }
 

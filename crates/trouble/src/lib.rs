@@ -6,6 +6,9 @@
 //! - [`task_statuses`] — タスクの状態のマスタ (key・色・完了扱い)
 //! - [`field_layouts`] — チケットの入力欄の表示設定
 //! - [`notifications`] — 通知の設定
+//! - [`tickets`] — チケット (CRUD・一覧・CSV・状態の遷移)
+//! - [`workflow`] — チケットの状態と遷移の定義・既定の作成・履歴
+//! - [`webhook`] — tenant の webhook への配信 (口は [`AppState::webhooks`] に積むだけで、送るのは worker が応答の後で)
 //!
 //! 全部の口が `X-Tenant-ID` を要る (auth-worker が付ける。無い・UUID でない → 401。
 //! `alc_core_wasm::require_tenant_header`)。rust と同じく role は見ない。
@@ -16,6 +19,9 @@ pub mod field_layouts;
 pub mod master;
 pub mod notifications;
 pub mod task_statuses;
+pub mod tickets;
+pub mod webhook;
+pub mod workflow;
 
 use std::sync::Arc;
 
@@ -23,14 +29,20 @@ use alc_core_wasm::require_tenant_header;
 use alc_worker_db::{kind, PgClient};
 use axum::http::StatusCode;
 use axum::{middleware, Router};
+use chrono::{DateTime, Utc};
 use futures_util::lock::Mutex;
 
 pub type LogSink = Arc<dyn Fn(&str) + Send + Sync>;
+/// 「今」(webhook の payload の timestamp・配信ログの delivered_at)。worker は `Date.now()`、テストは固定の時刻
+pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct AppState {
     pub pg: Arc<Mutex<PgClient>>,
     pub log: LogSink,
+    pub now: Clock,
+    /// 応答の後で送る webhook (1 リクエストに 1 つ)
+    pub webhooks: webhook::Outbox,
 }
 
 impl AppState {
@@ -57,6 +69,8 @@ pub fn router() -> Router<AppState> {
         .merge(task_statuses::router())
         .merge(field_layouts::router())
         .merge(notifications::router())
+        .merge(tickets::router())
+        .merge(workflow::router())
         .route_layer(middleware::from_fn(require_tenant_header));
     Router::new().nest("/api", trouble)
 }

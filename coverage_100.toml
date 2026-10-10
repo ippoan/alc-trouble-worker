@@ -4,7 +4,7 @@
 #   TROUBLE_TEST_ADMIN_DATABASE_URL=... cargo llvm-cov --locked -p trouble --text > cov-trouble.txt
 #   bash scripts/check_coverage_100.sh --use-cache cov-trouble.txt
 #
-# 計測するのは `cargo test -p trouble` の全部 = 各 module の単体テスト (純粋関数) と tests/api_db.rs
+# 計測するのは `cargo test -p trouble` の全部 = 各 module の単体テスト (純粋関数) と tests/api_db.rs・tickets_db.rs・webhook_db.rs
 # (口から実 DB まで。接続先が無ければ失敗する)。
 # worker 本体 (直下の src/、wasm 専用) は native で計測できないので対象外。
 
@@ -27,3 +27,15 @@ path = "crates/trouble/src/field_layouts.rs"
 # 通知の設定 (400・upsert の部分の更新)
 [[files]]
 path = "crates/trouble/src/notifications.rs"
+
+# チケット (CRUD・一覧の絞り込みと並び・CSV・遷移・積む webhook)
+[[files]]
+path = "crates/trouble/src/tickets.rs"
+
+# 状態の流れ (状態・遷移の CRUD・setup・履歴・遷移の可否)
+[[files]]
+path = "crates/trouble/src/workflow.rs"
+
+# webhook の配信 (設定・SSRF の検査・署名・再試行・配信ログ)
+[[files]]
+path = "crates/trouble/src/webhook.rs"
