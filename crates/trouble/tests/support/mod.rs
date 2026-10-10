@@ -25,8 +25,10 @@ use uuid::Uuid;
 
 pub const ADMIN_URL_ENV: &str = "TROUBLE_TEST_ADMIN_DATABASE_URL";
 pub const RT_ROLE: &str = "alc_api_rt";
-/// trouble の表を読めるが書けないロール (auto-seed の作成が失敗する経路を通すため)
+/// trouble の表を読めるが書けないロール (auto-seed・チケットの作成などが失敗する経路を通すため)
 pub const READ_ONLY_ROLE: &str = "trouble_test_read_only";
+/// 状態の変更の履歴 (trouble_status_history) にだけ書けないロール (履歴が失敗してもチケットの口は成功する経路)
+pub const NO_HISTORY_ROLE: &str = "trouble_test_no_history";
 /// 使い捨ての DB 専用 (秘密ではない)
 const PASSWORD: &str = "trouble-test-throwaway";
 const SEARCH_PATH: &str = "-c search_path=alc_api,public";
@@ -42,6 +44,10 @@ pub const TABLES: &[&str] = &[
     "trouble_task_statuses",
     "trouble_field_layouts",
     "trouble_notification_prefs",
+    "trouble_tickets",
+    "trouble_workflow_states",
+    "trouble_workflow_transitions",
+    "trouble_status_history",
 ];
 
 fn migrations_dir() -> std::path::PathBuf {
@@ -162,7 +168,12 @@ async fn migrate(su: &Client) {
         "ALTER ROLE {RT_ROLE} LOGIN PASSWORD '{PASSWORD}';
          CREATE ROLE {READ_ONLY_ROLE} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '{PASSWORD}';
          GRANT USAGE ON SCHEMA alc_api TO {READ_ONLY_ROLE};
-         GRANT SELECT ON {tables} TO {READ_ONLY_ROLE};"
+         GRANT SELECT ON {tables} TO {READ_ONLY_ROLE};
+         CREATE ROLE {NO_HISTORY_ROLE} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '{PASSWORD}';
+         GRANT USAGE ON SCHEMA alc_api TO {NO_HISTORY_ROLE};
+         GRANT SELECT, INSERT, UPDATE, DELETE ON {tables} TO {NO_HISTORY_ROLE};
+         REVOKE INSERT ON alc_api.trouble_status_history FROM {NO_HISTORY_ROLE};
+         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA alc_api TO {NO_HISTORY_ROLE};"
     ))
     .await
     .unwrap();
