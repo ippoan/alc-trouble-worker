@@ -7,7 +7,7 @@ path・method・JSON の形・status は rust と同じ (nuxt-trouble がその�
 (`workflow.rs`)・`tasks` と `tickets/{id}/tasks` (`tasks.rs`)・添付 `tickets/{id}/files`・`files/{id}`・
 `tasks/{id}/files`・`task-files/{id}` (`files.rs`。R2 の binding `TROUBLE_R2`)・予約通知 `schedules` と発火
 `/api/internal/trouble/schedules/{id}/fire` (`schedules.rs`。alarm は `alarm.rs`)・`lineworks/members` と LINE WORKS の通知
-(`lineworks.rs`)。これで rust の口は全部。
+(`lineworks.rs`)。これで rust の口は全部。rust に無い口: 通知のテスト送信 `notification-prefs/test-send` (`lineworks.rs`)。
 直下 = Worker (wasm 専用)、`crates/trouble/` = 口・SQL。
 
 rust の trouble_* webhook (`trouble_created` / `trouble_status_changed`) は移さない (`webhook_configs.event_type` の CHECK で設定できず、rust でも発火しない死んだ経路)。
@@ -45,6 +45,6 @@ DB テストは使い捨ての postgres:17 へ。URL が無ければ失敗 (skip
 - DB は `PgClient::tenant_tx` + `query_typed` 系だけ。名前付き prepared statement 禁止。Row を tx の外へ出さない。
   WHERE に tenant_id も明示する。SQL の意味は rust の `crates/alc-trouble/src/repo/*.rs` と同じにする。
 - マスタの表の名前は `MasterTable::TABLE` のリテラルだけ (SQL に埋め込むので、実行時の文字列を入れない)。
-- `coverage_100.toml` の登録を外さない。CI の本数 (lib 25・api_db 9・tickets_db 11・tasks_db 7・files_db 8・schedules_db 7・notify_db 5) はテストを足したら上げる。
+- `coverage_100.toml` の登録を外さない。CI の本数 (lib 26・api_db 9・tickets_db 11・tasks_db 7・files_db 8・schedules_db 7・notify_db 6) はテストを足したら上げる。
 - public repo: ホスト名・tenant UUID・個人情報を書かない。`v*` タグ = 本番 (Tag Release 手動)。
 - kit の rev は直下 `Cargo.toml` の 1 か所 (alc-lineworks-worker と同じ rev)。

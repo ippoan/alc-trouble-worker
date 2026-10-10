@@ -17,6 +17,7 @@ rust-alc-api と同じ。
 | `/api/trouble/task-statuses[/{id}]` | GET / POST / PUT / DELETE | タスクの状態。1 行も無ければ既定の 4 行を作って返す |
 | `/api/trouble/field-layout` | GET / PUT | 入力欄の表示設定 |
 | `/api/trouble/notification-prefs[/{id}]` | GET / POST / DELETE | 通知の設定 |
+| `/api/trouble/notification-prefs/test-send` | POST | `{"lineworks_user_id"}` の 1 人へ固定の本文でテスト送信 (rust に無い口。下の注) |
 | `/api/trouble/tickets` | GET / POST | チケットの一覧 (絞り込み・並び・ページ) と作成 (201) |
 | `/api/trouble/tickets/csv` | GET | 一覧と同じ絞り込みで BOM 付きの CSV |
 | `/api/trouble/tickets/{id}` | GET / PUT / DELETE | 取得・部分の更新・論理削除 |
@@ -53,6 +54,7 @@ LINE WORKS への送信はすべて ippoan/alc-lineworks-worker の Service Bind
 予約の alarm は ippoan/nuxt-notify の schedule-alarm (DO) を Service Binding `SCHEDULE_ALARM` で呼ぶ (`PUT`/`DELETE /alarms/{id}`、`X-Internal-Shared-Secret` は Secrets Store の `INTERNAL_SHARED_SECRET`)。binding か secret が無ければ登録しない (rust の `SCHEDULE_ALARM_URL` 未設定と同じ)。
 発火は `get_trouble_schedule` (SECURITY DEFINER) が pending の行だけを返すので、送信済み・取消済み・無い id は 404 (rust と同じ)。
 `GET /api/trouble/lineworks/members` の失敗は **rust と違う**: lineworks-worker が断った status と語 (`missing_scope` の `scope` など) を写し、届かない・binding 無しは 502 (rust は bot 無し 503・一覧の失敗 500 で本文なし)。
+`POST /api/trouble/notification-prefs/test-send` は通知が届くかの確かめ (rust-alc-api の notify の `lineworks/channels/{id}/test-send` と同じ考え方)。本文は固定 (`[テスト] トラブル管理の LINE WORKS 通知の送信確認です。`) で、通知と同じ経路・同じ body で送る。通知と違い失敗は応答に返す: 成功 204、lineworks-worker の断りは members と同じく status と語を写し、届かない・binding 無しは 502。宛先が空・256 byte 超・`/ ? # %`・空白・制御文字を含むなら送らずに 400 `{"error":"target_invalid"}`。
 
 マスタ 4 本の `PUT /{id}` は `{"sort_order": n}` だけを変える。作成は 201、名前の重複は 409、空白だけの名前は 400。
 

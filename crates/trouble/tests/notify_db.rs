@@ -1,4 +1,4 @@
-//! チケット・タスクの LINE WORKS 通知と、メンバーの口 (alc-lineworks-worker の中継) を、実 DB (`alc_api_rt` で接続) で通す。
+//! チケット・タスクの LINE WORKS 通知と、メンバーの口 (alc-lineworks-worker の中継)・テスト送信の口を、実 DB (`alc_api_rt` で接続) で通す。
 //! alc-lineworks-worker はモック (tests/support の `MockService`)。文面と通知の条件は rust-alc-api の tickets.rs・tasks.rs と同じ。
 //! 接続先は `TROUBLE_TEST_ADMIN_DATABASE_URL` (無ければ失敗する。tests/support)。
 
@@ -353,5 +353,119 @@ async fn members_relay() {
     assert_eq!(
         app.logs(),
         ["trouble: lineworks members failed: lineworks (not_configured)"]
+    );
+}
+
+#[tokio::test]
+async fn test_send() {
+    const URI: &str = "/api/trouble/notification-prefs/test-send";
+    let app = app().await;
+    let t = tenant().await;
+    let send = |body: Value| call(&app, "POST", URI, Some(t), Some(body));
+
+    // 固定の本文を 1 人へ (通知と同じ body: to.user_id・bot_config_id なし・X-Tenant-ID)
+    let got = send(json!({"lineworks_user_id": "u-test"})).await;
+    assert_eq!(got.status, 204);
+    assert!(got.body.is_empty());
+    assert_eq!(
+        sent(&app, t),
+        pairs(&[(
+            "u-test",
+            "[テスト] トラブル管理の LINE WORKS 通知の送信確認です。"
+        )])
+    );
+    // 自由文は受けない (余分なキーは無視して固定の本文)
+    assert_eq!(
+        send(json!({"lineworks_user_id": "u-test", "text": "自由文"}))
+            .await
+            .status,
+        204
+    );
+    assert_eq!(sent(&app, t)[1].1, trouble::lineworks::TEST_MESSAGE);
+
+    // lineworks-worker の断りは status と語を写す (自由文は載せない)
+    app.lineworks.respond(
+        404,
+        br#"{"error":"bot_config_not_found","message":"free text"}"#,
+    );
+    let got = send(json!({"lineworks_user_id": "u-secret"})).await;
+    assert_eq!(got.status, 404);
+    assert_eq!(got.json(), json!({"error": "bot_config_not_found"}));
+    app.lineworks.respond(502, br#"{"error":"upstream_error"}"#);
+    let got = send(json!({"lineworks_user_id": "u-secret"})).await;
+    assert_eq!(got.status, 502);
+    assert_eq!(got.json(), json!({"error": "upstream_error"}));
+    // 届かない → 502
+    app.lineworks.unreachable.store(true, Ordering::SeqCst);
+    let got = send(json!({"lineworks_user_id": "u-secret"})).await;
+    assert_eq!(got.status, 502);
+    assert_eq!(got.json(), json!({"error": "upstream_error"}));
+    app.lineworks.unreachable.store(false, Ordering::SeqCst);
+
+    // 宛先の検査 (lineworks-worker の target_invalid と同じ規則 + 長さ) は送らずに 400
+    let before = app.lineworks.calls().len();
+    for body in [
+        json!({}),
+        json!({"lineworks_user_id": ""}),
+        json!({"lineworks_user_id": "a b"}),
+        json!({"lineworks_user_id": "a/b"}),
+        json!({"lineworks_user_id": "a?b"}),
+        json!({"lineworks_user_id": "a#b"}),
+        json!({"lineworks_user_id": "a%b"}),
+        json!({"lineworks_user_id": "a\nb"}),
+        json!({"lineworks_user_id": "a".repeat(257)}),
+    ] {
+        let got = send(body.clone()).await;
+        assert_eq!(got.status, 400, "{body}");
+        assert_eq!(got.json(), json!({"error": "target_invalid"}));
+    }
+    assert_eq!(app.lineworks.calls().len(), before);
+
+    // ログは固定の語だけ (宛先・tenant を出さない)
+    assert_eq!(
+        app.logs(),
+        [
+            "trouble: lineworks test-send failed: lineworks (status 404)",
+            "trouble: lineworks test-send failed: lineworks (status 502)",
+            "trouble: lineworks test-send failed: lineworks (fetch)",
+        ]
+    );
+    for line in app.logs() {
+        assert!(!line.contains("u-secret") && !line.contains(&t.to_string()));
+    }
+
+    // X-Tenant-ID が無い → 401 (送らない)
+    let got = call(
+        &app,
+        "POST",
+        URI,
+        None,
+        Some(json!({"lineworks_user_id": "u-test"})),
+    )
+    .await;
+    assert_eq!(got.status, 401);
+    assert_eq!(app.lineworks.calls().len(), before);
+
+    // binding が無い → 502
+    let app = build_bindings(
+        rt_client().await,
+        Bindings {
+            lineworks: false,
+            ..ALL
+        },
+    );
+    let got = call(
+        &app,
+        "POST",
+        URI,
+        Some(t),
+        Some(json!({"lineworks_user_id": "u-test"})),
+    )
+    .await;
+    assert_eq!(got.status, 502);
+    assert_eq!(got.json(), json!({"error": "upstream_error"}));
+    assert_eq!(
+        app.logs(),
+        ["trouble: lineworks test-send failed: lineworks (not_configured)"]
     );
 }
