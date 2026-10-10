@@ -29,18 +29,28 @@ rust-alc-api と同じ。
 | `/api/trouble/tickets/{id}/tasks` | GET / POST | チケットのタスクの一覧 (並び順) と作成 (201) |
 | `/api/trouble/tickets/{id}/tasks/reorder` | PUT | `task_ids` の順に並び順を振り直す (そのチケットに無い id は 404) |
 | `/api/trouble/tasks/{id}` | PUT / DELETE | タスクの部分の更新・削除 |
+| `/api/trouble/tickets/{id}/files` | GET / POST | チケットの添付の一覧と、multipart の 1 つを R2 に置く (201) |
+| `/api/trouble/tickets/{id}/files/trash` | GET | 論理削除した添付 |
+| `/api/trouble/files/{id}` | DELETE | 添付の論理削除 (R2 の実体は残す) |
+| `/api/trouble/files/{id}/download` | GET | 本体 (`Content-Type` は保存した値、`Content-Disposition` は ASCII だけ。下の注) |
+| `/api/trouble/files/{id}/restore` | POST | 論理削除を戻す |
+| `/api/trouble/tasks/{id}/files` | GET / POST | タスクの添付の一覧と作成 |
+| `/api/trouble/task-files/{id}`[`/download`] | DELETE / GET | タスクの添付の論理削除・本体 |
 
 rust がチケットの作成・遷移で発火していた webhook は移さない (`webhook_configs` の CHECK でトラブルの設定が作れず、rust でも発火しない)。
 
 タスクの作成 (`POST /api/trouble/tickets/{id}/tasks`) は、チケットがその tenant に無ければ (無い・別の tenant) 404 で作らない。**rust と違う** (rust は確かめず、無いチケットは外部キーの違反で 500、別の tenant のチケットには作れてしまう)。
+
+添付は R2 の binding `TROUBLE_R2` (本番 `trouble-files`・staging `trouble-files-staging`、キーは rust と同じ) に置く。binding が無ければ添付の読み書きは 503。上限は rust と同じ 20MB (超えると 400)、拡張子の許可リストは rust にも無い。アップロードは親 (チケット / タスク) がその tenant に無ければ R2 に書かずに 404。
+`Content-Disposition` は **rust と違う**: rust は日本語の名前を生の UTF-8 で返すが、ここは ASCII だけで `attachment; filename*=UTF-8''<percent-encoding>; filename="<非 ASCII・制御文字・"・\ を _ にした名前>"` (RFC 6266。Workers が非 ASCII のヘッダ値を値入りの警告にしてログに出すため)。
 
 マスタ 4 本の `PUT /{id}` は `{"sort_order": n}` だけを変える。作成は 201、名前の重複は 409、空白だけの名前は 400。
 
 ## 構成
 
 - 直下 (`src/`) — Worker 本体 (wasm 専用)。DB への経路 (`src/db.rs`: staging = Workers VPC → PgBouncer、
-  本番 = Hyperdrive `TROUBLE_HYPERDRIVE`、ローカル = `DATABASE_URL`) と workers-rs への載せ方
-- `crates/trouble/` — 口と SQL (native でもビルドでき、`tests/api_db.rs`・`tests/tickets_db.rs`・`tests/tasks_db.rs` が実 DB で通す)
+  本番 = Hyperdrive `TROUBLE_HYPERDRIVE`、ローカル = `DATABASE_URL`)・R2 の binding (`src/r2.rs`) と workers-rs への載せ方
+- `crates/trouble/` — 口と SQL (native でもビルドでき、`tests/api_db.rs`・`tests/tickets_db.rs`・`tests/tasks_db.rs`・`tests/files_db.rs` が実 DB で通す。R2 はモック)
 - `scripts/` — 公開範囲の検査 (`check-exposure.sh` と陰性対照)、migration の取得、coverage の gate
 
 デプロイ: PR → `wrangler deploy --dry-run`、main への merge → staging、タグ `v*` (Tag Release を手動) → 本番。

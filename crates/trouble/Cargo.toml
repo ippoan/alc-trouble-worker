@@ -10,7 +10,8 @@ publish = false
 # 出どころは直下の Cargo.toml の [workspace.dependencies] の 1 か所 (ここに git / path を書かない)
 alc-core-wasm = { workspace = true }
 alc-worker-db = { workspace = true }
-axum = { version = "0.8", default-features = false, features = ["json", "query"] }
+# multipart は添付の口 (rust と同じ axum の Multipart。multer は pure Rust で wasm32 でもビルドできる)
+axum = { version = "0.8", default-features = false, features = ["json", "multipart", "query"] }
 # 行の created_at / updated_at (rust-alc-api と同じ chrono の JSON の形。時計は使わない)。
 # alloc は CSV の発生日の `format("%Y-%m-%d")` (rust と同じ書き方) に要る
 chrono = { version = "0.4", default-features = false, features = ["alloc", "serde"] }

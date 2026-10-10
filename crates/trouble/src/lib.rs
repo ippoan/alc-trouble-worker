@@ -8,7 +8,8 @@
 //! - [`notifications`] — 通知の設定
 //! - [`tickets`] — チケット (CRUD・一覧・CSV・状態の遷移)
 //! - [`workflow`] — チケットの状態と遷移の定義・既定の作成・履歴
-//! - [`tasks`] — チケットのタスク (経過記録。CRUD・横断の一覧・並べ替え。ファイルの口は後続)
+//! - [`tasks`] — チケットのタスク (経過記録。CRUD・横断の一覧・並べ替え)
+//! - [`files`] — チケット・タスクの添付 (R2 に置く。置き場は [`files::FileStore`] で差し替える)
 //!
 //! 全部の口が `X-Tenant-ID` を要る (auth-worker が付ける。無い・UUID でない → 401。
 //! `alc_core_wasm::require_tenant_header`)。rust と同じく role は見ない。
@@ -16,6 +17,7 @@
 //! ログ・エラー応答は固定の語だけ (エラーの文・識別子を載せない。DB のエラーは `kind` = SQLSTATE か固定の label)。
 
 pub mod field_layouts;
+pub mod files;
 pub mod master;
 pub mod notifications;
 pub mod task_statuses;
@@ -27,6 +29,7 @@ use std::sync::Arc;
 
 use alc_core_wasm::require_tenant_header;
 use alc_worker_db::{kind, PgClient};
+use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::{middleware, Router};
 use futures_util::lock::Mutex;
@@ -37,6 +40,8 @@ pub type LogSink = Arc<dyn Fn(&str) + Send + Sync>;
 pub struct AppState {
     pub pg: Arc<Mutex<PgClient>>,
     pub log: LogSink,
+    /// 添付の置き場 (R2 の binding `TROUBLE_R2`)。無ければ添付の読み書きは 503 (rust の storage 無しと同じ)
+    pub files: Option<files::SharedStore>,
 }
 
 impl AppState {
@@ -53,6 +58,9 @@ pub fn is_conflict(e: &tokio_postgres::Error) -> bool {
     e.as_db_error().is_some_and(|db| db.constraint().is_some())
 }
 
+/// 本文の上限 (rust の main.rs の `DefaultBodyLimit` と同じ 20MB。添付の multipart と JSON に効く)
+pub const BODY_LIMIT: usize = 20 * 1024 * 1024;
+
 /// 全部の口。rust と同じく `/api` の下 (auth-worker は `/api/trouble/...` のまま Service Binding に渡す)
 pub fn router() -> Router<AppState> {
     let trouble = Router::new()
@@ -66,6 +74,9 @@ pub fn router() -> Router<AppState> {
         .merge(tickets::router())
         .merge(workflow::router())
         .merge(tasks::router())
+        .merge(files::router())
         .route_layer(middleware::from_fn(require_tenant_header));
-    Router::new().nest("/api", trouble)
+    Router::new()
+        .nest("/api", trouble)
+        .layer(DefaultBodyLimit::max(BODY_LIMIT))
 }

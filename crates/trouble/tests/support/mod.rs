@@ -10,16 +10,20 @@
 
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use alc_worker_db::PgClient;
 use axum::body::Body;
-use axum::http::Request;
+use axum::http::{HeaderMap, Request};
 use axum::Router;
+use futures_util::future::BoxFuture;
 use futures_util::lock::Mutex;
 use tokio::sync::OnceCell;
 use tokio_postgres::{Client, Config, NoTls};
 use tower::ServiceExt;
+use trouble::files::{FileStore, SharedStore, StoreError};
 use trouble::{router, AppState};
 use uuid::Uuid;
 
@@ -49,6 +53,7 @@ pub const TABLES: &[&str] = &[
     "trouble_workflow_transitions",
     "trouble_status_history",
     "trouble_tasks",
+    "trouble_files",
 ];
 
 fn migrations_dir() -> std::path::PathBuf {
@@ -245,6 +250,7 @@ pub async fn tenant() -> Uuid {
 pub struct App {
     pub router: Router,
     pub logs: Arc<StdMutex<Vec<String>>>,
+    pub store: Arc<MockStore>,
 }
 
 impl App {
@@ -253,17 +259,74 @@ impl App {
     }
 }
 
-/// worker の src/lib.rs と同じ組み立て
+/// R2 の代わり (キー → (本体, Content-Type))。`fail_put` / `fail_get` で失敗させる
+#[derive(Default)]
+pub struct MockStore {
+    pub objects: StdMutex<HashMap<String, (Vec<u8>, String)>>,
+    pub fail_put: AtomicBool,
+    pub fail_get: AtomicBool,
+}
+
+impl MockStore {
+    pub fn keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = self.objects.lock().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    pub fn object(&self, key: &str) -> Option<(Vec<u8>, String)> {
+        self.objects.lock().unwrap().get(key).cloned()
+    }
+}
+
+impl FileStore for MockStore {
+    fn put<'a>(
+        &'a self,
+        key: &'a str,
+        bytes: Vec<u8>,
+        content_type: &'a str,
+    ) -> BoxFuture<'a, Result<(), StoreError>> {
+        Box::pin(async move {
+            if self.fail_put.load(Ordering::SeqCst) {
+                return Err(StoreError("put"));
+            }
+            self.objects
+                .lock()
+                .unwrap()
+                .insert(key.to_owned(), (bytes, content_type.to_owned()));
+            Ok(())
+        })
+    }
+
+    fn get<'a>(&'a self, key: &'a str) -> BoxFuture<'a, Result<Vec<u8>, StoreError>> {
+        Box::pin(async move {
+            if self.fail_get.load(Ordering::SeqCst) {
+                return Err(StoreError("get"));
+            }
+            self.object(key).map(|o| o.0).ok_or(StoreError("missing"))
+        })
+    }
+}
+
+/// worker の src/lib.rs と同じ組み立て (R2 はモック)
 pub fn build(pg: PgClient) -> App {
+    build_with(pg, true)
+}
+
+/// `with_store` が false なら R2 の binding が無い worker (添付の口は 503)
+pub fn build_with(pg: PgClient, with_store: bool) -> App {
     let logs = Arc::new(StdMutex::new(Vec::new()));
     let sink = logs.clone();
+    let store = Arc::new(MockStore::default());
     let state = AppState {
         pg: Arc::new(Mutex::new(pg)),
         log: Arc::new(move |m: &str| sink.lock().unwrap().push(m.to_owned())),
+        files: with_store.then(|| store.clone() as SharedStore),
     };
     App {
         router: router().with_state(state),
         logs,
+        store,
     }
 }
 
@@ -273,6 +336,7 @@ pub async fn app() -> App {
 
 pub struct Got {
     pub status: u16,
+    pub headers: HeaderMap,
     pub body: Vec<u8>,
 }
 
@@ -290,27 +354,46 @@ pub async fn call(
     tenant: Option<Uuid>,
     body: Option<serde_json::Value>,
 ) -> Got {
+    match body {
+        Some(v) => {
+            let bytes = serde_json::to_vec(&v).unwrap();
+            call_raw(app, method, uri, tenant, Some("application/json"), bytes).await
+        }
+        None => call_raw(app, method, uri, tenant, None, Vec::new()).await,
+    }
+}
+
+/// 本文と Content-Type をそのまま送る
+pub async fn call_raw(
+    app: &App,
+    method: &str,
+    uri: &str,
+    tenant: Option<Uuid>,
+    content_type: Option<&str>,
+    body: Vec<u8>,
+) -> Got {
     let mut b = Request::builder().method(method).uri(uri);
     if let Some(t) = tenant {
         b = b.header("X-Tenant-ID", t.to_string());
     }
-    let body = match body {
-        Some(v) => {
-            b = b.header("content-type", "application/json");
-            Body::from(serde_json::to_vec(&v).unwrap())
-        }
-        None => Body::empty(),
-    };
+    if let Some(ct) = content_type {
+        b = b.header("content-type", ct);
+    }
     let resp = app
         .router
         .clone()
-        .oneshot(b.body(body).unwrap())
+        .oneshot(b.body(Body::from(body)).unwrap())
         .await
         .unwrap();
     let status = resp.status().as_u16();
+    let headers = resp.headers().clone();
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap()
         .to_vec();
-    Got { status, body }
+    Got {
+        status,
+        headers,
+        body,
+    }
 }

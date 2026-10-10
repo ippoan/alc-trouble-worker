@@ -130,6 +130,17 @@ async fn tenant_header_is_required() {
         ("PUT", format!("/api/trouble/tickets/{id}/tasks/reorder")),
         ("PUT", format!("/api/trouble/tasks/{id}")),
         ("DELETE", format!("/api/trouble/tasks/{id}")),
+        // ファイルの口 (crate::files)
+        ("GET", format!("/api/trouble/tasks/{id}/files")),
+        ("POST", format!("/api/trouble/tasks/{id}/files")),
+        ("GET", format!("/api/trouble/task-files/{id}/download")),
+        ("DELETE", format!("/api/trouble/task-files/{id}")),
+        ("GET", format!("/api/trouble/tickets/{id}/files")),
+        ("POST", format!("/api/trouble/tickets/{id}/files")),
+        ("GET", format!("/api/trouble/tickets/{id}/files/trash")),
+        ("GET", format!("/api/trouble/files/{id}/download")),
+        ("POST", format!("/api/trouble/files/{id}/restore")),
+        ("DELETE", format!("/api/trouble/files/{id}")),
     ];
     for (method, path) in &paths {
         let got = call(&app, method, path, None, None).await;
@@ -138,16 +149,6 @@ async fn tenant_header_is_required() {
             (401, true),
             "{method} {path}"
         );
-    }
-    // ファイルの口はまだ無い (後続の PR)
-    for (method, path) in [
-        ("GET", format!("/api/trouble/tasks/{id}/files")),
-        ("GET", format!("/api/trouble/task-files/{id}/download")),
-        ("DELETE", format!("/api/trouble/task-files/{id}")),
-    ] {
-        let t = Uuid::new_v4();
-        let got = call(&app, method, &path, Some(t), None).await;
-        assert_eq!(got.status, 404, "{method} {path}");
     }
     assert!(app.logs().is_empty());
 }
