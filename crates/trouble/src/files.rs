@@ -5,8 +5,8 @@
 //! - `GET /trouble/tickets/{ticket_id}/files/trash` — 論理削除したもの (チケットのものだけ) を削除の新しい順
 //! - `POST`/`GET /trouble/tasks/{task_id}/files` — タスクの添付 (行の `ticket_id` はタスクのチケット)
 //! - `GET /trouble/files/{id}/download`・`GET /trouble/task-files/{id}/download` — 本体と
-//!   `Content-Type` (保存した値)・`Content-Disposition: attachment; filename="<名前の " を _ に>"` (rust と同じく
-//!   名前はそのまま。日本語も符号化しない)。論理削除したものも落とせる (rust と同じ)
+//!   `Content-Type` (保存した値)・`Content-Disposition` (ASCII だけ。`filename*` と ASCII の代替の `filename`。
+//!   **rust と違う**、[`content_disposition`])。論理削除したものも落とせる (rust と同じ)
 //! - `DELETE /trouble/files/{id}`・`DELETE /trouble/task-files/{id}` — 論理削除 (204)。R2 の実体は消さない
 //! - `POST /trouble/files/{id}/restore` — 論理削除を戻す (204)
 //!
@@ -94,9 +94,30 @@ pub fn storage_key(tenant_id: Uuid, parent: Parent, file_uuid: Uuid, filename: &
     }
 }
 
-/// rust と同じ `Content-Disposition` (`"` だけを `_` に替える)
+/// `Content-Disposition` (RFC 6266)。**ASCII だけ**で組む: `filename*` に UTF-8 の percent-encoding (RFC 5987)、
+/// `filename` に ASCII の代替 (非 ASCII・制御文字・`"`・`\` を `_` に)。
+///
+/// **rust と違う**: rust は `filename="<名前の " を _ に>"` で日本語を生の UTF-8 のまま返す。Workers は非 ASCII の
+/// ヘッダ値を、値 (= ファイル名) 入りの警告にして出すので、ファイル名がログに出る経路を作らないよう ASCII にする。
+/// `filename*` を先に置くのは、nuxt-trouble の `/filename="?(.+?)"?$/` が最初の `filename=` から行末までを拾うため
+/// (後ろに `filename="…"` を置けば、それだけを拾う)。ブラウザは `filename*` を優先する。
 pub fn content_disposition(filename: &str) -> String {
-    format!("attachment; filename=\"{}\"", filename.replace('"', "_"))
+    let fallback: String = filename
+        .chars()
+        .map(|c| match c {
+            ' '..='~' if c != '"' && c != '\\' => c,
+            _ => '_',
+        })
+        .collect();
+    let mut encoded = String::new();
+    for b in filename.bytes() {
+        if b.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&b) {
+            encoded.push(b as char);
+        } else {
+            encoded.push_str(&format!("%{b:02X}"));
+        }
+    }
+    format!("attachment; filename*=UTF-8''{encoded}; filename=\"{fallback}\"")
 }
 
 macro_rules! columns {
@@ -508,10 +529,20 @@ mod tests {
     }
 
     #[test]
-    fn disposition_is_the_rust_string() {
+    fn disposition_is_ascii_with_filename_star() {
+        // 日本語・空白・`"`・`\`・制御文字: filename* は percent-encoding、filename は ASCII の代替
         assert_eq!(
-            content_disposition("報告書 \"最終\".pdf"),
-            "attachment; filename=\"報告書 _最終_.pdf\""
+            content_disposition("報告書 \"最終\"\\a\t.pdf"),
+            "attachment; filename*=UTF-8''%E5%A0%B1%E5%91%8A%E6%9B%B8%20%22%E6%9C%80%E7%B5%82%22%5Ca%09.pdf; \
+             filename=\"___ _____a_.pdf\""
         );
+        // ASCII の名前は filename の値がそのまま (attr-char はそのまま、ほかは % にする)
+        assert_eq!(
+            content_disposition("report_v1-2.final(1).pdf"),
+            "attachment; filename*=UTF-8''report_v1-2.final%281%29.pdf; \
+             filename=\"report_v1-2.final(1).pdf\""
+        );
+        // 値は全部 ASCII (Workers が非 ASCII のヘッダ値をログに出さない)
+        assert!(content_disposition("見積🚚.xlsx").is_ascii());
     }
 }

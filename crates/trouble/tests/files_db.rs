@@ -172,9 +172,26 @@ async fn ticket_file_upload_list_download_delete_trash_restore() {
     assert_eq!(got.status, 200);
     assert_eq!(got.body, b"hello world");
     assert_eq!(got.headers[header::CONTENT_TYPE], "application/pdf");
+    // ASCII だけ (rust と違う): filename* に UTF-8 の percent-encoding、filename に ASCII の代替
     assert_eq!(
-        got.headers[header::CONTENT_DISPOSITION].as_bytes(),
-        "attachment; filename=\"報告書 最終.v2.pdf\"".as_bytes()
+        got.headers[header::CONTENT_DISPOSITION],
+        "attachment; filename*=UTF-8''%E5%A0%B1%E5%91%8A%E6%9B%B8%20%E6%9C%80%E7%B5%82.v2.pdf; \
+         filename=\"___ __.v2.pdf\""
+    );
+    // `"`・`\` 入りの名前 (multipart では送れないので行を書き換える)
+    admin()
+        .await
+        .execute(
+            "UPDATE alc_api.trouble_files SET filename = $1 WHERE id = $2::text::uuid",
+            &[&"見積 \"改\\訂\".pdf", &id],
+        )
+        .await
+        .unwrap();
+    let got = call(&app, "GET", &download, Some(t), None).await;
+    assert_eq!(
+        got.headers[header::CONTENT_DISPOSITION],
+        "attachment; filename*=UTF-8''%E8%A6%8B%E7%A9%8D%20%22%E6%94%B9%5C%E8%A8%82%22.pdf; \
+         filename=\"__ _____.pdf\""
     );
 
     // 論理削除: 一覧から消えて trash に出る。R2 の実体は残る
@@ -255,7 +272,7 @@ async fn task_file_upload_list_download_delete() {
     assert_eq!(got.body, b"task file data");
     assert_eq!(
         got.headers[header::CONTENT_DISPOSITION],
-        "attachment; filename=\"report.pdf\""
+        "attachment; filename*=UTF-8''report.pdf; filename=\"report.pdf\""
     );
 
     let delete = format!("/api/trouble/task-files/{id}");

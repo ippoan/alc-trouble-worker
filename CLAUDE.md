@@ -32,7 +32,9 @@ DB テストは使い捨ての postgres:17 へ。URL が無ければ失敗 (skip
   DB の失敗は `trouble: <段> failed: db (<kind>)` (kind は SQLSTATE か固定の label)。応答の本文は rust と同じく空。
 - 添付の R2: 置き場は `files::FileStore` (Worker は `src/r2.rs`、テストはモック)。R2 の await を `tenant_tx` の中に入れない。
   アップロードは親 (チケット / タスク) が自 tenant に在ることを tenant_tx で確かめてから R2 に書く (無ければ 404。
-  外部キーは RLS を通らない)。キー・上限 20MB・Content-Disposition (名前は符号化しない)・論理削除 (R2 は消さない) は rust と同じ。
+  外部キーは RLS を通らない)。キー・上限 20MB・論理削除 (R2 は消さない) は rust と同じ。
+  **Content-Disposition は rust と違う**: ASCII だけ (`filename*=UTF-8''<percent>; filename="<ASCII 代替>"` の順。
+  Workers が非 ASCII のヘッダ値をファイル名入りの警告にするため。順は nuxt の正規表現のため)。
   staging の R2 は本番の bucket `trouble-files` を指さない (check-exposure.sh)。R2 の失敗は `trouble: <段> failed: r2 (<段の名前>)`。
 - role は見ない (rust も `X-Tenant-ID` だけ)。
 - DB は `PgClient::tenant_tx` + `query_typed` 系だけ。名前付き prepared statement 禁止。Row を tx の外へ出さない。
