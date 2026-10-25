@@ -55,7 +55,3 @@ path = "crates/trouble/src/alarm.rs"
 # LINE WORKS の通知とメンバーの中継 (lineworks-worker はモック。断りの語の写し)
 [[files]]
 path = "crates/trouble/src/lineworks.rs"
-
-# カメラ停止の自動チケット (本文の 400・カメラの在る無しの 404・DB の失敗)
-[[files]]
-path = "crates/trouble/src/camera.rs"

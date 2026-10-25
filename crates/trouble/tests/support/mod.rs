@@ -57,8 +57,6 @@ pub const TABLES: &[&str] = &[
     "trouble_tasks",
     "trouble_files",
     "trouble_schedules",
-    // カメラ停止の自動チケットの口がカメラの在る・無しを引く
-    "cameras",
 ];
 
 /// テストの alarm の secret (モックが受け取る値。秘密ではない)
@@ -417,20 +415,6 @@ pub fn build_bindings(pg: PgClient, b: Bindings) -> App {
         lineworks,
         alarm,
     }
-}
-
-/// カメラを 1 台入れる (superuser で)
-pub async fn camera(tenant: Uuid) -> Uuid {
-    let id = Uuid::new_v4();
-    admin()
-        .await
-        .execute(
-            "INSERT INTO alc_api.cameras (id, tenant_id, name) VALUES ($1, $2, 'cam')",
-            &[&id, &tenant],
-        )
-        .await
-        .unwrap();
-    id
 }
 
 /// 通知の設定を 1 行入れる (superuser で)
